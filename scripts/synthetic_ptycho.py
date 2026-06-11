@@ -2,8 +2,9 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import matplotlib.pyplot as plt
-import src.models as models
-import src.object as obj
+
+from src import models as models 
+from src import object as obj
 
 
 # Set device to MPS if available, otherwise CPU

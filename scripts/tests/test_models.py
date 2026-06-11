@@ -5,7 +5,7 @@
 # 3. Visualizes the predicted intensity patterns to verify that the model is simulating the expected physics (e.g., diffraction patterns from the aperture). 
 import torch
 import matplotlib.pyplot as plt
-import src.models as models
+from src import models as models
 
 wavelength = 500e-9
 object_type = 'circular_aperture'

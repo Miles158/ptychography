@@ -1,8 +1,10 @@
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
-import src.models as models
-import src.object as objects
+
+from src import models as models 
+from src import object as obj
+
 
 # mps is the apple silicon GPU. "cpu" otherwise, or CUDA if its available.
 device = "mps"
