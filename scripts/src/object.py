@@ -1,3 +1,11 @@
+"""
+object.py
+Written by Miles Houston with the help of Gemini
+
+This file houses functions that can create object planes 
+useful to the testing of Ptychography models. 
+"""
+
 import torch
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -53,6 +61,8 @@ def make_text_mask(text, grid_size, margin=0., stroke_frac=0.01, font_name="Helv
         stroke_width=stroke_w,
         stroke_fill=255
     )
+    img = img.transpose(Image.FLIP_TOP_BOTTOM)
 
     mask = (np.array(img) > 128).astype(np.float32)
+
     return torch.from_numpy(mask).to(torch.complex64).to(device)

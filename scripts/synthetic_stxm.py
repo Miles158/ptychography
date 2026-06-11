@@ -1,9 +1,8 @@
 import torch
-import torch.nn as nn
-import torch.optim as optim
 import matplotlib.pyplot as plt
 import numpy as np
 import src.models as models
+import src.object as objects
 
 # mps is the apple silicon GPU. "cpu" otherwise, or CUDA if its available.
 device = "mps"
@@ -21,68 +20,10 @@ x = torch.linspace(-object_extent/2, object_extent/2, grid_size, device=device)
 y = torch.linspace(-object_extent/2, object_extent/2, grid_size, device=device)
 X, Y = torch.meshgrid(x, y, indexing='xy')
 
-########################################################################################
-# This is an AI-generated function that draws the letters ALS (upside down :/) as a test object. 
-
-from PIL import Image, ImageDraw, ImageFont
-import os
-import matplotlib.font_manager as fm
-
-def make_text_mask(text, grid_size, margin=0., stroke_frac=0.01, font_name="Helvetica", device="cpu"):
-    # Find an installed font path using matplotlib
-    font_path = fm.findfont(font_name, fallback_to_default=True)
-    if not os.path.exists(font_path):
-        raise FileNotFoundError(f"Could not locate a TTF for font_name={font_name}. "
-                                f"Matplotlib returned: {font_path}")
-
-    # Create grayscale canvas
-    img = Image.new("L", (grid_size, grid_size), 0)
-    draw = ImageDraw.Draw(img)
-
-    stroke_w = max(1, int(grid_size * stroke_frac))  # keep this as-is
-
-    usable = int((1 - 2 * margin) * grid_size)
-    lo, hi = 1, grid_size
-    best = lo
-
-    while lo <= hi:
-        mid = (lo + hi) // 2
-        f = ImageFont.truetype(font_path, mid)
-        bbox = draw.textbbox((0, 0), text, font=f)
-        w = bbox[2] - bbox[0]
-        h = bbox[3] - bbox[1]
-
-        # <-- IMPORTANT: compensate for stroke (textbbox does NOT include stroke)
-        if (w + 2 * stroke_w) <= usable and (h + 2 * stroke_w) <= usable:
-            best = mid
-            lo = mid + 1
-        else:
-            hi = mid - 1
-
-    font = ImageFont.truetype(font_path, best)
-
-    # Center the text
-    bbox = draw.textbbox((0, 0), text, font=font)
-    w = bbox[2] - bbox[0]
-    h = bbox[3] - bbox[1]
-    x0 = (grid_size - w) // 2
-    y0 = (grid_size - h) // 2
-
-    draw.text(
-        (x0, y0), text,
-        font=font,
-        fill=255,
-        stroke_width=stroke_w,
-        stroke_fill=255
-    )
-
-    mask = (np.array(img) > 128).astype(np.float32)
-    return torch.from_numpy(mask).to(torch.complex64).to(device)
-
 
 # --- usage ---
 core_grid_size = 256
-gt_object = make_text_mask("ALS", core_grid_size, margin=0.1, stroke_frac=0.01, font_name="Helvetica", device=device)
+gt_object = objects.make_text_mask("ALS", core_grid_size, margin=0.1, stroke_frac=0.01, font_name="Helvetica", device=device)
 
 # The model's grid size defines the fully padded simulation space
 # We pass the smaller core object to set_object, and the model handles the padding internally.
@@ -96,26 +37,17 @@ X, Y = torch.meshgrid(x, y, indexing='xy')
 
 ###################################################################################################
 
-# Probe parameters (needed early for overlap calculation)
+# Probe parameters
 # STXM requires a small, focused probe. Let's use 50um.
 probe_radius = 1e-6
 
 # Generate synthetic measurements by scanning the illumination over the unpadded core region
-desired_overlap = 0.66 # e.g., 66% overlap
-probe_diameter = 2 * probe_radius
-shift_step_meters = probe_diameter * (1 - desired_overlap)
-shift_step = max(1, int(shift_step_meters / grid_spacing)) # step size in pixels
+scan_step_meters = 5e-6 # Physical distance (gap) between scan points
+shift_step = max(1, int(scan_step_meters / grid_spacing)) # step size in pixels
 
 # Calculate number of scan positions to cover the unpadded core region
 core_extent = core_grid_size * grid_spacing
-num_positions = int(core_extent / shift_step_meters) + 1
-
-shifts = []
-for i in range(-num_positions//2 + 1, num_positions//2 + 1):
-    for j in range(-num_positions//2 + 1, num_positions//2 + 1):
-        shifts.append((i * shift_step, j * shift_step))
-
-print(f"Generating synthetic data for {len(shifts)} scan positions with overlap {desired_overlap*100}%...")
+num_positions = int(core_extent / scan_step_meters) + 1
 
 # Model used to generate synthetic data. 
 gt_model = models.STXM(
@@ -143,7 +75,7 @@ stxm_image = np.zeros((scan_points, scan_points))
 start_idx = -(scan_points // 2) + 1
 end_idx = (scan_points // 2) + 1
 
-print(f"Running STXM scan: {scan_points}x{scan_points} points...")
+print(f"Running STXM scan: {scan_points}x{scan_points} = {scan_points**2} points...")
 
 with torch.no_grad():
     # Iterate through the grid of scan positions
@@ -167,21 +99,53 @@ plot_extent = (-object_extent/2, object_extent/2, -object_extent/2, object_exten
 # Plot 1: Ground Truth Amplitude
 plt.subplot(1, 2, 1)
 plt.imshow(torch.abs(gt_model.object_amplitude).detach().cpu().numpy(), extent=plot_extent, origin='lower', cmap='gray')
-plt.title('Ground Truth Object (Padded)')
+plt.title('Object Plane')
+plt.xlabel('(m)')
+plt.ylabel('(m)')
+
 plt.colorbar()
 
 # Plot 2: STXM Image
 plt.subplot(1, 2, 2)
-# Calculate physical extent of the scanned area
-scan_physical_extent = (
-    start_idx * shift_step * grid_spacing,
-    end_idx * shift_step * grid_spacing,
-    start_idx * shift_step * grid_spacing,
-    end_idx * shift_step * grid_spacing
+
+
+# Coordinates of scan points (physical)
+coords = np.linspace(start_idx * shift_step * grid_spacing,
+                     (end_idx-1) * shift_step * grid_spacing,
+                     scan_points)
+
+Xc, Yc = np.meshgrid(coords, coords)
+
+plt.scatter(
+    Xc.flatten(), Yc.flatten(),
+    c=stxm_image.flatten(),
+    s=2, marker='s',
+    cmap='gray'
 )
-plt.imshow(stxm_image, extent=scan_physical_extent, origin='lower', cmap='gray')
-plt.title('STXM Image (Transmitted Intensity)')
+plt.gca().set_aspect('equal', 'box')
+plt.title('Reconstruction')
+plt.xlabel('X scan shift (m)')
+plt.ylabel('Y scan shift(m)')
 plt.colorbar()
+
+
+
+# # Calculate physical extent of the scanned area
+# scan_physical_extent = (
+#     start_idx * shift_step * grid_spacing,
+#     end_idx * shift_step * grid_spacing,
+#     start_idx * shift_step * grid_spacing,
+#     end_idx * shift_step * grid_spacing
+# )
+
+
+
+# plt.imshow(stxm_image, extent=scan_physical_extent, origin='lower', cmap='gray')
+# plt.title('Detector Plane')
+# plt.xlabel('(m)')
+# plt.ylabel('(m)')
+
+# plt.colorbar()
 
 plt.tight_layout()
 plt.savefig('stxm_reconstruction.png')

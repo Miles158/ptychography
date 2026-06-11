@@ -5,9 +5,6 @@
 # 3. Visualizes the predicted intensity patterns to verify that the model is simulating the expected physics (e.g., diffraction patterns from the aperture). 
 import torch
 import matplotlib.pyplot as plt
-import numpy as np
-import matplotlib.colors as mcolors
-
 import src.models as models
 
 wavelength = 500e-9

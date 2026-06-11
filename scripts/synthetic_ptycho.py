@@ -2,8 +2,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import matplotlib.pyplot as plt
-import numpy as np
-import os
 import src.models as models
 import src.object as obj
 
@@ -103,10 +101,10 @@ recon_model.object_amplitude.data = torch.ones((grid_size, grid_size), dtype=tor
 recon_model.object_phase.data = torch.zeros((grid_size, grid_size), dtype=torch.float32, device=device)
 
 # --- 3. Setup Optimizer ---
-optimizer = optim.AdamW(recon_model.parameters(), lr=0.005)
+optimizer = optim.AdamW(recon_model.parameters(), lr=0.001)
 criterion = nn.MSELoss()
 
-num_epochs = 40
+num_epochs = 75
 loss_history = []
 
 # --- 4. Optimization Loop ---
