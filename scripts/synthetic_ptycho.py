@@ -3,117 +3,80 @@ import torch.nn as nn
 import torch.optim as optim
 import matplotlib.pyplot as plt
 import numpy as np
+import os
 import src.models as models
+import src.object as obj
 
 
-
-# mps is the apple silicon GPU. "cpu" otherwise, or CUDA if its available.
+# Set device to MPS if available, otherwise CPU
 device = "mps"
 
 # --- 1. Setup Simulation Parameters ---
-object_extent = 75e-3 # 75 mm
-grid_size = 1028 
+# The model's grid size defines the fully padded simulation space
+grid_size = 1024
+object_extent = 75e-3 #
 grid_spacing = object_extent / grid_size
 wavelength = 500e-9
 z_dist = 250e-3 #
+detector_size = 1.5e-3 # 
 
 # Setup coordinate grid
 x = torch.linspace(-object_extent/2, object_extent/2, grid_size, device=device)
 y = torch.linspace(-object_extent/2, object_extent/2, grid_size, device=device)
 X, Y = torch.meshgrid(x, y, indexing='xy')
 
-
-
-
-########################################################################################
-# This is an AI-generated function that draws the letters ALS (upside down :/) as a test object. 
-
-from PIL import Image, ImageDraw, ImageFont
-import os
-import matplotlib.font_manager as fm
-
-def make_text_mask(text, grid_size, margin=0., stroke_frac=0.01, font_name="Helvetica", device="cpu"):
-    # Find an installed font path using matplotlib
-    font_path = fm.findfont(font_name, fallback_to_default=True)
-    if not os.path.exists(font_path):
-        raise FileNotFoundError(f"Could not locate a TTF for font_name={font_name}. "
-                                f"Matplotlib returned: {font_path}")
-
-    # Create grayscale canvas
-    img = Image.new("L", (grid_size, grid_size), 0)
-    draw = ImageDraw.Draw(img)
-
-    stroke_w = max(1, int(grid_size * stroke_frac))  # keep this as-is
-
-    usable = int((1 - 2 * margin) * grid_size)
-    lo, hi = 1, grid_size
-    best = lo
-
-    while lo <= hi:
-        mid = (lo + hi) // 2
-        f = ImageFont.truetype(font_path, mid)
-        bbox = draw.textbbox((0, 0), text, font=f)
-        w = bbox[2] - bbox[0]
-        h = bbox[3] - bbox[1]
-
-        # <-- IMPORTANT: compensate for stroke (textbbox does NOT include stroke)
-        if (w + 2 * stroke_w) <= usable and (h + 2 * stroke_w) <= usable:
-            best = mid
-            lo = mid + 1
-        else:
-            hi = mid - 1
-
-    font = ImageFont.truetype(font_path, best)
-
-    # Center the text
-    bbox = draw.textbbox((0, 0), text, font=font)
-    w = bbox[2] - bbox[0]
-    h = bbox[3] - bbox[1]
-    x0 = (grid_size - w) // 2
-    y0 = (grid_size - h) // 2
-
-    draw.text(
-        (x0, y0), text,
-        font=font,
-        fill=255,
-        stroke_width=stroke_w,
-        stroke_fill=255
-    )
-
-    mask = (np.array(img) > 128).astype(np.float32)
-    return torch.from_numpy(mask).to(torch.complex64).to(device)
-
-
 # --- usage ---
-gt_object = make_text_mask("ALS", grid_size, margin=0.25, stroke_frac=0.01, font_name="Helvetica", device=device)
+core_grid_size = 256
+gt_object = obj.make_text_mask("A", core_grid_size, margin=0.01, stroke_frac=0.01, font_name="Helvetica", device=device)
 
-###################################################################################################
+# Zero-pad the object up to the full simulation grid size
+pad_pixels = (grid_size - core_grid_size) // 2
+gt_object = torch.nn.functional.pad(gt_object, (pad_pixels, pad_pixels, pad_pixels, pad_pixels), mode='constant', value=0.0)
+
 
 
 # Generate synthetic measurements by scanning the illumination over the object
-num_positions = 12
-shift_step = int(grid_size / 30) # step size in pixels (smaller step = more overlap)
+probe_radius = 2e-3 # Make probe 4mm (much smaller than the 75mm object!)
+# probe = torch.exp(-(X**2 + Y**2) / (2 * probe_radius**2)).to(torch.complex64).to(device)
+# probe_phase = torch.exp(1j * 1e6 * (X**2 + Y**2))
+# probe = (probe_amplitude * probe_phase).to(torch.complex64).to(device)
+
+
+
+r = torch.sqrt(X**2 + Y**2)  # uses your existing X, Y in meters
+
+phi0 = 0.0
+mask = (r <= probe_radius).to(torch.float32)  # top-hat aperture
+probe = (mask.to(torch.complex64) * torch.exp(torch.tensor(1j * phi0)))
+
+
+desired_overlap = 0.72
+probe_diameter = 2 * probe_radius
+shift_step_meters = probe_diameter * (1 - desired_overlap)
+shift_step = max(1, int(shift_step_meters / grid_spacing)) # step size in pixels
+
+# Calculate number of scan positions to cover the unpadded core region
+core_extent = core_grid_size * grid_spacing
+num_positions = int(core_extent / shift_step_meters) + 1
 
 shifts = []
 for i in range(-num_positions//2 + 1, num_positions//2 + 1):
     for j in range(-num_positions//2 + 1, num_positions//2 + 1):
         shifts.append((i * shift_step, j * shift_step))
 
-print(f"Generating synthetic data for {len(shifts)} scan positions...")
+print(f"Generating synthetic data for {len(shifts)} scan positions with overlap {desired_overlap*100}%...")
 
-# Model used to generate synthetic data. 
+# We use the true physics to generate our "experimental" data
 gt_model = models.PtychoModel(
-    grid_size=grid_size, 
-    grid_spacing=grid_spacing, 
+    grid_size_object=grid_size, 
+    grid_spacing_object=grid_spacing, 
     wavelength=wavelength, 
     z_dist=z_dist,
-    device=device
+    device=device,
+    detector_size=detector_size
 ).to(device)
 gt_model.set_object(gt_object)
 
-# Gaussian illumination for the sample.
-probe_radius = 4e-3 # Could sanity check. 
-probe = torch.exp(-(X**2 + Y**2) / (2 * probe_radius**2)).to(torch.complex64).to(device)
 
 # Collect measurements
 measurements = []
@@ -126,40 +89,52 @@ measurements = torch.stack(measurements)
 print("Measurements generated. Starting optimization...")
 
 # --- 2. Initialize the Reconstruction Model ---
-model = models.PtychoModel(
-    grid_size=grid_size, 
-    grid_spacing=grid_spacing, 
+recon_model = models.PtychoModel(
+    grid_size_object=grid_size, 
+    grid_spacing_object=grid_spacing, 
     wavelength=wavelength, 
     z_dist=z_dist,
-    device=device
+    device=device,
+    detector_size=detector_size
 ).to(device)
 
-# Rational starting point for optimiation 
-model.object_amplitude.data = torch.ones((grid_size, grid_size), dtype=torch.float32, device=device)
-model.object_phase.data = torch.zeros((grid_size, grid_size), dtype=torch.float32, device=device)
+
+recon_model.object_amplitude.data = torch.ones((grid_size, grid_size), dtype=torch.float32, device=device)
+recon_model.object_phase.data = torch.zeros((grid_size, grid_size), dtype=torch.float32, device=device)
 
 # --- 3. Setup Optimizer ---
-optimizer = optim.AdamW(model.parameters(), lr=0.005)
+optimizer = optim.AdamW(recon_model.parameters(), lr=0.005)
 criterion = nn.MSELoss()
 
-num_epochs = 60
+num_epochs = 40
 loss_history = []
 
 # --- 4. Optimization Loop ---
 for epoch in range(num_epochs):
-    optimizer.zero_grad()
-    total_loss = 0.0
-
+    
+    epoch_loss = 0
+    # Process each scan position
     for idx, (shift_x, shift_y) in enumerate(shifts):
-        predicted = model(probe, pixel_shift_x=shift_x, pixel_shift_y=shift_y)
-        total_loss = total_loss + criterion(predicted, measurements[idx])
-
-    total_loss = total_loss / len(shifts)
-    total_loss.backward()
-    optimizer.step()
-
-    loss_val = total_loss.item()
+        optimizer.zero_grad()
+        
+        # Forward pass
+        predicted_intensity = recon_model(probe, pixel_shift_x=shift_x, pixel_shift_y=shift_y)
+        
+        # Calculate loss against the measurement
+        loss = criterion(predicted_intensity, measurements[idx])
+        epoch_loss += loss.item()
+        
+        # Backward pass and optimize per position
+        loss.backward()
+        optimizer.step()
+        
+        # Optional: Apply constraints to the amplitude (e.g. amplitude between 0 and 1)
+        with torch.no_grad():
+            recon_model.object_amplitude.data = torch.clamp(recon_model.object_amplitude.data, 0, 1)
+            
+    loss_val = epoch_loss / len(shifts)
     loss_history.append(loss_val)
+    
     print(f"Epoch {epoch+1}/{num_epochs}, Loss: {loss_val:.4e}")
 
 print("Optimization complete.")
@@ -186,13 +161,13 @@ plt.colorbar()
 
 # Plot 3: Reconstructed Amplitude
 plt.subplot(2, 2, 3)
-plt.imshow(model.object_amplitude.detach().cpu().numpy(), extent=plot_extent, origin='lower')
+plt.imshow(recon_model.object_amplitude.detach().cpu().numpy(), extent=plot_extent, origin='lower')
 plt.title('Reconstructed Amplitude')
 plt.colorbar()
 
 # Plot 4: Reconstructed Phase
 plt.subplot(2, 2, 4)
-plt.imshow(model.object_phase.detach().cpu().numpy(), extent=plot_extent, origin='lower')
+plt.imshow(recon_model.object_phase.detach().cpu().numpy(), extent=plot_extent, origin='lower')
 plt.title('Reconstructed Phase')
 plt.colorbar()
 

@@ -51,22 +51,22 @@ def fresnel_propagate(wavefront, z_dist, grid_spacing, wavelength):
 
 
 # this function is responsible for the fraunhofer propagation of the wavefront from the sample plane to the detector plane.
-def fraunhofer_propagate(wavefront, z_dist, grid_size, grid_spacing, wavelength, detector_size=None, detector_pixels=None):
+def fraunhofer_propagate(wavefront, z_dist, grid_spacing_object, wavelength, detector_size=None, detector_pixels=None):
     ny, nx = wavefront.shape
     device = wavefront.device
     k = 2 * torch.pi / wavelength
 
     # Get the spatial frequencies mapped by the FFT
-    fx = torch.fft.fftshift(torch.fft.fftfreq(nx, d=grid_spacing, device=device))
-    fy = torch.fft.fftshift(torch.fft.fftfreq(ny, d=grid_spacing, device=device))
+    fx = torch.fft.fftshift(torch.fft.fftfreq(nx, d=grid_spacing_object, device=device))
+    fy = torch.fft.fftshift(torch.fft.fftfreq(ny, d=grid_spacing_object, device=device))
     
     # Map spatial frequencies to physical coordinates at the detector plane
     x_detector = fx * wavelength * z_dist
     y_detector = fy * wavelength * z_dist
     X_det, Y_det = torch.meshgrid(x_detector, y_detector, indexing='xy')
 
-    # Continuous Fourier Transform approximation (proper scaling and shifting)
-    wavefront_ft = torch.fft.fftshift(torch.fft.fft2(torch.fft.ifftshift(wavefront))) * (grid_spacing**2)
+    # FFT
+    wavefront_ft = torch.fft.fftshift(torch.fft.fft2(torch.fft.ifftshift(wavefront))) * (grid_spacing_object**2)
     
     # The quadratic phase term must use the detector coordinates
     quadratic_phase = torch.exp(1j * k * (X_det**2 + Y_det**2) / (2 * z_dist)) / (1j * wavelength * z_dist)
@@ -74,7 +74,23 @@ def fraunhofer_propagate(wavefront, z_dist, grid_size, grid_spacing, wavelength,
     
     detector_wave = wavefront_ft * quadratic_phase * phase_factor 
 
+
+    # Note that the detector wave now has a different grid spacing / size than the input wave front. 
     return detector_wave
 
-def capture_intensity(wavefront):
+def crop_wavefront(wavefront, grid_spacing_detector, detector_size):
+    n = int(detector_size / grid_spacing_detector) # number of pixels to capture.
+    sh = (wavefront.shape[-2] - n) // 2 # number of pixels to chop off the top / bottom
+    sw = (wavefront.shape[-1] - n) // 2 # number of pixels to chop off the left / right
+    return wavefront[..., sh:sh+n, sw:sw+n]
+
+def capture_diffraction(wavefront, grid_spacing_detector, detector_size):
+    cropped_wavefront = crop_wavefront(wavefront, grid_spacing_detector, detector_size)
+    return torch.abs(cropped_wavefront) ** 2
+
+def capture_intensity(wavefront, grid_spacing_detector, detector_size):
+    return capture_diffraction(wavefront, grid_spacing_detector, detector_size).mean()
+
+
+def capture_intensity2(wavefront):
     return torch.abs(wavefront)**2
