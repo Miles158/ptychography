@@ -7,8 +7,8 @@ This file provides Ptychography and STXM Pytorch models useful for simulations.
 
 import torch
 import torch.nn as nn
-from . import propagation as prop
-from . import adaptive_optics as AO
+import propagation as prop
+import adaptive_optics as AO
 
 
 class PtychoModel(nn.Module):

@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from src import models as models 
-from src import object as obj
+from src import object as objects
 
 
 # mps is the apple silicon GPU. "cpu" otherwise, or CUDA if its available.

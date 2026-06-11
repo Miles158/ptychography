@@ -2,12 +2,13 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import matplotlib.pyplot as plt
-import src.models as models
-import src.object as obj
-import src.adaptive_optics as ao
 
-# Set device to MPS if available, otherwise CPU
-device = "mps" if torch.backends.mps.is_available() else "cpu"
+import models as models 
+import object as obj
+import adaptive_optics as ao
+
+
+device = "mps" 
 
 # --- 1. Setup Simulation Parameters ---
 grid_size = 1024
@@ -37,7 +38,7 @@ phi0 = 0.0
 probe_amplitude_mask = (probe_distance <= probe_radius).to(torch.float32)
 
 # Set up the deformable mirror
-num_actuators = 16
+num_actuators = 6
 mirror = ao.deformableMirror(
     number_actuators=num_actuators,
     max_stroke=250e-9,
@@ -48,7 +49,7 @@ mirror = ao.deformableMirror(
 )
 
 # Generate synthetic measurements by applying random commands to the DM instead of shifting the sample
-num_measurements = 36
+num_measurements = 100
 print(f"Generating synthetic data for {num_measurements} random DM configurations...")
 
 # We use the true physics to generate our "experimental" data
