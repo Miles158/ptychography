@@ -2,6 +2,7 @@ import torch
 
 class deformableMirror(torch.nn.Module):
     def __init__(self,
+            wavelength,
             number_actuators,
             max_stroke,
             mirror_radius,
@@ -10,6 +11,7 @@ class deformableMirror(torch.nn.Module):
             device='cpu'
     ):
         super().__init__()
+        self.wavelength = wavelength
         self.number_actuators = number_actuators
         self.max_stroke = max_stroke
         self.mirror_radius = mirror_radius
@@ -55,9 +57,7 @@ class deformableMirror(torch.nn.Module):
 
     def forward(self, actuator_commands):
         """
-        Calculates the 2D surface shape of the mirror.
-        actuator_commands: tensor of shape (number_actuators,) with values in [-1, 1].
-                           If None, uses self.actuator_commands.
+        Takes a list of actuator commands and returns the mirrors response in the phase change 
         """
         self.actuator_commands=actuator_commands
             
@@ -72,11 +72,18 @@ class deformableMirror(torch.nn.Module):
             # Add this actuator's contribution
             mirror_surface += actuator_command * self.influence_function(x_actuator_cen, y_actuator_cen)
 
-        # 3. clip the mirror so it has no response / reflection outside its radius. 
+        # 3. Convert the physical response to phase response and clip the mirror. 
+
+        
+
+        mirror_surface_phase = (4.0 * torch.pi / self.wavelength) * mirror_surface  # rad
+
+        mirror_complex_phase = torch.exp(1j * mirror_surface_phase).to(torch.complex64)
+
         aperture_mask = (self.X**2 + self.Y**2) <= self.mirror_radius**2
-        
-        mirror_surface = mirror_surface * aperture_mask
-        
-        return mirror_surface
+
+        mirror_response = mirror_complex_phase * aperture_mask
+
+        return mirror_response
 
 

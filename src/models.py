@@ -28,7 +28,8 @@ class PtychoModel(nn.Module):
         grid_spacing_object,
         wavelength,
         z_dist,
-        detector_size=None,
+        detector_size,
+        detector_pixels,
         device="cpu",
     ):
         """Create the ptychography model."""
@@ -38,6 +39,7 @@ class PtychoModel(nn.Module):
         self.wavelength = wavelength
         self.z_dist = z_dist
         self.detector_size = detector_size
+        self.detector_pixels = detector_pixels
         self.device = device
 
         self.grid_spacing_detector = (
@@ -110,10 +112,11 @@ class PtychoModel(nn.Module):
             )
 
         # 5. Capture the expected intensity at the detector
-        predicted_intensity = prop.capture_diffraction(
+        predicted_intensity = prop.capture_diffraction_downsample(
             wavefront=detector_wave,
             grid_spacing_detector=self.grid_spacing_detector,
             detector_size=self.detector_size,
+            detector_pixels= self.detector_pixels
         )
 
         return predicted_intensity
@@ -197,19 +200,16 @@ class DiptychModel(nn.Module):
         # 2. act on the wavefront with the deformable mirror
 
 
-        mirror_heights = mirror_instance.deformableMirror(actuator_commands)  # meters
+        mirror_response = mirror_instance.deformableMirror(actuator_commands)  # meters
 
-        phase = (4.0 * torch.pi / self.wavelength) * mirror_heights  # rad
 
-        mirror_phase_factor = torch.exp(1j * phase).to(torch.complex64)
-
-        reflected_illumination = illumination.to(torch.complex64) * mirror_phase_factor
+        reflected_illumination = illumination.to(torch.complex64) * mirror_response
 
 
         # 2. act on the wavefront with the deformable mirror
 
         # 3. interaction with the object
-        exit_wavefront = reflected_illumination * object
+        exit_wavefront = reflected_illumination * complex_object
 
         # 4. Propagate to detector. Assuming far-field propagation.
         detector_wave = prop.fraunhofer_propagate(

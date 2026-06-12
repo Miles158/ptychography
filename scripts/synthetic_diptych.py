@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 import torch.nn as nn
 import torch.optim as optim
 import matplotlib.pyplot as plt
@@ -6,50 +7,70 @@ import matplotlib.pyplot as plt
 import models as models 
 import object as obj
 import adaptive_optics as ao
+import helpers as helpers
 
 
 device = "mps" 
 
 # --- 1. Setup Simulation Parameters ---
-grid_size = 1024
-object_extent = 75e-3 #
-grid_spacing = object_extent / grid_size
+
+# General Parameters
 wavelength = 500e-9
 z_dist = 250e-3 #
+grid_size = 1024
+object_extent = 75e-3 #
+object_fraction = 0.1 # the object takes up a smaller part of the entire object. 
+grid_spacing = object_extent / grid_size
+probe_radius = 15e-3 
+
+source_intensity = 100000.0 # Units?? 
+
+# Detector Parameters
 detector_size = 1.5e-3 # 
+detector_pixels = 512
+
+# Mirror Parameters
+mirror_radius = probe_radius
+actuator_max_stroke = 250e-9
+actuator_jitter = 0.025 # careful with this, its in the normalized actuator commands [-1,1]
+num_actuators = 16
+
+# Optimization
+num_measurements = 20
+num_epochs = 250
+
 
 # Setup coordinate grid
 x = torch.linspace(-object_extent/2, object_extent/2, grid_size, device=device)
 y = torch.linspace(-object_extent/2, object_extent/2, grid_size, device=device)
 X, Y = torch.meshgrid(x, y, indexing='xy')
 
-# --- usage ---
-core_grid_size = 256
-gt_object = obj.make_text_mask("A", core_grid_size, margin=0.01, stroke_frac=0.01, font_name="Helvetica", device=device)
-
+# make the object 
+core_grid_size = int(grid_size * object_fraction)
+gt_object = obj.make_text_mask("ALS", core_grid_size, margin=0.01, stroke_frac=0.01, font_name="Helvetica", device=device)
 # Zero-pad the object up to the full simulation grid size
 pad_pixels = (grid_size - core_grid_size) // 2
 gt_object = torch.nn.functional.pad(gt_object, (pad_pixels, pad_pixels, pad_pixels, pad_pixels), mode='constant', value=0.0)
 
+
 # The beam is now the same size as the sample (or at least covers it entirely)
-probe_radius = 15e-3 # Large probe
 probe_distance = torch.sqrt(X**2 + Y**2)
 phi0 = 0.0
 probe_amplitude_mask = (probe_distance <= probe_radius).to(torch.float32)
 
+
 # Set up the deformable mirror
-num_actuators = 6
 mirror = ao.deformableMirror(
+    wavelength=wavelength,
     number_actuators=num_actuators,
-    max_stroke=250e-9,
-    mirror_radius=probe_radius,
+    max_stroke=actuator_max_stroke,
+    mirror_radius=mirror_radius,
     grid_size_wavefront=grid_size,
     grid_spacing_wavefront=grid_spacing,
     device=device
 )
 
 # Generate synthetic measurements by applying random commands to the DM instead of shifting the sample
-num_measurements = 100
 print(f"Generating synthetic data for {num_measurements} random DM configurations...")
 
 # We use the true physics to generate our "experimental" data
@@ -59,8 +80,10 @@ gt_model = models.PtychoModel(
     wavelength=wavelength, 
     z_dist=z_dist,
     device=device,
-    detector_size=detector_size
+    detector_size=detector_size,
+    detector_pixels=detector_pixels
 ).to(device)
+
 gt_model.set_object(gt_object)
 
 # Collect measurements
@@ -72,17 +95,18 @@ with torch.no_grad():
         # Generate random actuator commands [-1, 1]
         commands = (torch.rand(num_actuators, device=device) * 2) - 1
         dm_commands.append(commands)
+        dm_commands_error = helpers.add_actuator_jitter(commands, actuator_jitter)
         
-        # Calculate the phase delay caused by the DM surface (reflection doubles the path length change)
-        dm_surface = mirror.forward(commands)
-        dm_phase = torch.exp(1j * (4 * torch.pi / wavelength) * dm_surface)
+        # generate the phase delay 
+        dm_phase = mirror.forward(dm_commands_error)
         
         # Combine base probe amplitude with DM phase
-        probe = (probe_amplitude_mask.to(torch.complex64) * dm_phase)
+        probe = (probe_amplitude_mask.to(torch.complex64) * dm_phase) * source_intensity
         
         # No shift (0,0) - diptych relies entirely on the probe phase variations
-        intensity = gt_model(probe, pixel_shift_x=0, pixel_shift_y=0)
-        measurements.append(intensity)
+        detector_intensity = gt_model(probe, pixel_shift_x=0, pixel_shift_y=0)
+        noisy_intensity = helpers.add_shot_noise(detector_intensity)
+        measurements.append(noisy_intensity)
         
 measurements = torch.stack(measurements)
 dm_commands = torch.stack(dm_commands)
@@ -90,23 +114,23 @@ dm_commands = torch.stack(dm_commands)
 print("Measurements generated. Starting optimization...")
 
 # --- 2. Initialize the Reconstruction Model ---
-recon_model = models.PtychoModel(
+model = models.PtychoModel(
     grid_size_object=grid_size, 
     grid_spacing_object=grid_spacing, 
     wavelength=wavelength, 
     z_dist=z_dist,
     device=device,
-    detector_size=detector_size
+    detector_size=detector_size,
+    detector_pixels=detector_pixels
 ).to(device)
 
-recon_model.object_amplitude.data = torch.ones((grid_size, grid_size), dtype=torch.float32, device=device)
-recon_model.object_phase.data = torch.zeros((grid_size, grid_size), dtype=torch.float32, device=device)
+model.object_amplitude.data = torch.ones((grid_size, grid_size), dtype=torch.float32, device=device)
+model.object_phase.data = torch.zeros((grid_size, grid_size), dtype=torch.float32, device=device)
 
 # --- 3. Setup Optimizer ---
-optimizer = optim.AdamW(recon_model.parameters(), lr=0.05)
+optimizer = optim.AdamW(model.parameters(), lr=0.1)
 criterion = nn.MSELoss()
 
-num_epochs = 50
 loss_history = []
 
 # --- 4. Optimization Loop ---
@@ -119,15 +143,15 @@ for epoch in range(num_epochs):
         
         # Reconstruct the probe for this specific measurement using the known DM commands
         with torch.no_grad():
-            dm_surface = mirror.forward(dm_commands[idx])
-            dm_phase = torch.exp(1j * (4 * torch.pi / wavelength) * dm_surface)
-            probe = (probe_amplitude_mask.to(torch.complex64) * dm_phase)
+            dm_phase = mirror.forward(dm_commands[idx])
+            probe = (probe_amplitude_mask.to(torch.complex64) * dm_phase) * source_intensity
         
         # Forward pass (no shift)
-        predicted_intensity = recon_model(probe, pixel_shift_x=0, pixel_shift_y=0)
+        predicted_intensity = model(probe, pixel_shift_x=0, pixel_shift_y=0)
         
-        # Calculate loss against the measurement
-        loss = criterion(predicted_intensity, measurements[idx])
+        # Calculate loss against the measurement (using amplitude instead of raw photon intensity)
+        # This stabilizes optimization when dealing with very large integer photon counts.
+        loss = criterion(torch.sqrt(predicted_intensity + 1e-12), torch.sqrt(measurements[idx] + 1e-12))
         epoch_loss += loss.item()
         
         # Backward pass and optimize per position
@@ -136,7 +160,7 @@ for epoch in range(num_epochs):
         
         # Apply constraints to the amplitude
         with torch.no_grad():
-            recon_model.object_amplitude.data = torch.clamp(recon_model.object_amplitude.data, 0, 1)
+            model.object_amplitude.data = torch.clamp(model.object_amplitude.data, 0, 1)
             
     loss_val = epoch_loss / num_measurements
     loss_history.append(loss_val)
@@ -162,21 +186,70 @@ plot_extent = (-object_extent/2, object_extent/2, -object_extent/2, object_exten
 # Plot 2: Ground Truth Amplitude
 plt.subplot(2, 2, 2)
 plt.imshow(torch.abs(gt_object).cpu().numpy(), extent=plot_extent, origin='lower')
-plt.title('Ground Truth Amplitude')
+plt.title('Object plane transmission')
+plt.xlabel('(m)')
+plt.ylabel('(m)')
 plt.colorbar()
 
 # Plot 3: Reconstructed Amplitude
 plt.subplot(2, 2, 3)
-plt.imshow(recon_model.object_amplitude.detach().cpu().numpy(), extent=plot_extent, origin='lower')
-plt.title('Reconstructed Amplitude')
+plt.imshow(model.object_amplitude.detach().cpu().numpy(), extent=plot_extent, origin='lower')
+plt.title('Reconstructed transmission')
+plt.xlabel('(m)')
+plt.ylabel('(m)')
 plt.colorbar()
 
 # Plot 4: Reconstructed Phase
 plt.subplot(2, 2, 4)
-plt.imshow(recon_model.object_phase.detach().cpu().numpy(), extent=plot_extent, origin='lower')
+plt.imshow(model.object_phase.detach().cpu().numpy(), extent=plot_extent, origin='lower')
 plt.title('Reconstructed Phase')
+plt.xlabel('(m)')
+plt.ylabel('(m)')
 plt.colorbar()
 
 plt.tight_layout()
 plt.savefig('diptych_reconstruction.png')
 print("Saved reconstruction results to 'diptych_reconstruction.png'")
+
+
+# --- 6. Plot first 5 measurements and their probes ---
+print("Generating tableau of first 5 measurements...")
+
+# Get the extent of the detector for plotting
+detector_extent = (-detector_size/2, detector_size/2, -detector_size/2, detector_size/2)
+
+fig, axes = plt.subplots(2, 5, figsize=(20, 12))
+
+with torch.no_grad():
+    for i in range(5):
+        # 1. Recreate the probe
+        mirror_phase = mirror.forward(dm_commands[i])
+        probe = (probe_amplitude_mask.to(torch.complex64) * mirror_phase) * source_intensity
+        
+        # When amplitude is exactly 0, phase is mathematically not very well defined but torch.angle
+        # might return numerical noise or 0. We force it to 0 for a cleaner plot.
+        probe_phase_np = torch.angle(probe).cpu().numpy()
+        probe_phase_np[probe_amplitude_mask.cpu().numpy() == 0] = 0.0
+        
+        diffraction_intensity = measurements[i].cpu().numpy()
+        
+        # Plot Probe Phase
+        ax = axes[0, i]
+        im1 = ax.imshow(probe_phase_np, extent=plot_extent, origin='lower', cmap='twilight')
+        ax.set_title(f'Probe Phase {i+1}')
+        if i == 0: ax.set_ylabel('y (m)')
+        plt.colorbar(im1, ax=ax, fraction=0.046, pad=0.04)
+        
+
+        # Plot Detector Diffraction Pattern (Intensity)
+        ax = axes[1, i]
+        im3 = ax.imshow(np.log10(diffraction_intensity + 1e-12), extent=detector_extent, origin='lower', cmap='inferno')
+        ax.set_title(f'Diffraction {i+1} (log10)')
+        if i == 0: ax.set_ylabel('y (m)')
+        ax.set_xlabel('x (m)')
+        # im3.set_clim(0, diffraction_intensity.max()/2)
+        plt.colorbar(im3, ax=ax, fraction=0.046, pad=0.04)
+
+plt.tight_layout()
+plt.savefig('diptych_measurements_tableau.png')
+print("Saved measurement tableau to 'diptych_measurements_tableau.png'")

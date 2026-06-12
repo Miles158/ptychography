@@ -4,7 +4,7 @@ Written by Mile Houston
 
 Pytorch functions for optical propagation used in imaging simulations.
 """
-
+import torch.nn.functional as functional
 import torch
 
 # illuminate
@@ -127,6 +127,32 @@ def capture_diffraction(wavefront, grid_spacing_detector, detector_size):
 def capture_intensity(wavefront, grid_spacing_detector, detector_size):
     return capture_diffraction(wavefront, grid_spacing_detector, detector_size).mean()
 
+def downsample_area_exact(intensity, detector_pixels):
+    # intensity: [H, W] real tensor
+    H, W = intensity.shape[-2], intensity.shape[-1]
+    assert H % detector_pixels == 0 and W % detector_pixels == 0, \
+        f"{H}x{W} not divisible by {detector_pixels}"
 
-def capture_intensity2(wavefront):
-    return torch.abs(wavefront) ** 2
+    sh = H // detector_pixels
+    sw = W // detector_pixels
+
+    # reshape into bins and average
+    return intensity.reshape(detector_pixels, sh, detector_pixels, sw).mean(dim=(1, 3))
+
+
+def capture_diffraction_downsample(
+    wavefront,
+    grid_spacing_detector,
+    detector_size,
+    detector_pixels=None,
+):
+    """
+    Returns |cropped_wavefront|^2 downsampled to (detector_pixels, detector_pixels).
+    Uses area averaging to approximate intensity binning at the detector.
+    """
+    cropped = crop_wavefront(wavefront, grid_spacing_detector, detector_size)
+    intensity = torch.abs(cropped) ** 2
+
+    intensity_downsampled = functional.interpolate(intensity.unsqueeze(0).unsqueeze(1).cpu(), size=(detector_pixels, detector_pixels), mode="area")
+
+    return intensity_downsampled.squeeze().squeeze().to(intensity.device)
