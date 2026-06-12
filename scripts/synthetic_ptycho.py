@@ -3,9 +3,9 @@ import torch.nn as nn
 import torch.optim as optim
 import matplotlib.pyplot as plt
 
-from src import models as models 
-from src import object as obj
-
+import models as models 
+import object as obj
+import helpers
 
 # Set device to MPS if available, otherwise CPU
 device = "mps"
@@ -18,6 +18,10 @@ grid_spacing = object_extent / grid_size
 wavelength = 500e-9
 z_dist = 250e-3 #
 detector_size = 1.5e-3 # 
+probe_radius = 2e-3 # Make probe 4mm (much smaller than the 75mm object!)
+detector_pixels = 512
+desired_overlap = 0.72
+intensity = 100
 
 # Setup coordinate grid
 x = torch.linspace(-object_extent/2, object_extent/2, grid_size, device=device)
@@ -25,7 +29,7 @@ y = torch.linspace(-object_extent/2, object_extent/2, grid_size, device=device)
 X, Y = torch.meshgrid(x, y, indexing='xy')
 
 # --- usage ---
-core_grid_size = 256
+core_grid_size = 128
 gt_object = obj.make_text_mask("A", core_grid_size, margin=0.01, stroke_frac=0.01, font_name="Helvetica", device=device)
 
 # Zero-pad the object up to the full simulation grid size
@@ -35,7 +39,6 @@ gt_object = torch.nn.functional.pad(gt_object, (pad_pixels, pad_pixels, pad_pixe
 
 
 # Generate synthetic measurements by scanning the illumination over the object
-probe_radius = 2e-3 # Make probe 4mm (much smaller than the 75mm object!)
 # probe = torch.exp(-(X**2 + Y**2) / (2 * probe_radius**2)).to(torch.complex64).to(device)
 # probe_phase = torch.exp(1j * 1e6 * (X**2 + Y**2))
 # probe = (probe_amplitude * probe_phase).to(torch.complex64).to(device)
@@ -46,10 +49,9 @@ r = torch.sqrt(X**2 + Y**2)  # uses your existing X, Y in meters
 
 phi0 = 0.0
 mask = (r <= probe_radius).to(torch.float32)  # top-hat aperture
-probe = (mask.to(torch.complex64) * torch.exp(torch.tensor(1j * phi0)))
+probe = (mask.to(torch.complex64) * torch.exp(torch.tensor(1j * phi0))) * intensity
 
 
-desired_overlap = 0.72
 probe_diameter = 2 * probe_radius
 shift_step_meters = probe_diameter * (1 - desired_overlap)
 shift_step = max(1, int(shift_step_meters / grid_spacing)) # step size in pixels
@@ -72,7 +74,8 @@ gt_model = models.PtychoModel(
     wavelength=wavelength, 
     z_dist=z_dist,
     device=device,
-    detector_size=detector_size
+    detector_size=detector_size,
+    detector_pixels=detector_pixels
 ).to(device)
 gt_model.set_object(gt_object)
 
@@ -82,7 +85,8 @@ measurements = []
 with torch.no_grad():
     for shift_x, shift_y in shifts:
         intensity = gt_model(probe, pixel_shift_x=shift_x, pixel_shift_y=shift_y)
-        measurements.append(intensity)
+        noisy_intensity = helpers.add_shot_noise(intensity)
+        measurements.append(noisy_intensity)
 measurements = torch.stack(measurements)
 
 print("Measurements generated. Starting optimization...")
@@ -94,7 +98,8 @@ recon_model = models.PtychoModel(
     wavelength=wavelength, 
     z_dist=z_dist,
     device=device,
-    detector_size=detector_size
+    detector_size=detector_size,
+    detector_pixels=detector_pixels
 ).to(device)
 
 
@@ -102,10 +107,10 @@ recon_model.object_amplitude.data = torch.ones((grid_size, grid_size), dtype=tor
 recon_model.object_phase.data = torch.zeros((grid_size, grid_size), dtype=torch.float32, device=device)
 
 # --- 3. Setup Optimizer ---
-optimizer = optim.AdamW(recon_model.parameters(), lr=0.001)
+optimizer = optim.AdamW(recon_model.parameters(), lr=0.01)
 criterion = nn.MSELoss()
 
-num_epochs = 75
+num_epochs = 60
 loss_history = []
 
 # --- 4. Optimization Loop ---
@@ -120,7 +125,7 @@ for epoch in range(num_epochs):
         predicted_intensity = recon_model(probe, pixel_shift_x=shift_x, pixel_shift_y=shift_y)
         
         # Calculate loss against the measurement
-        loss = criterion(predicted_intensity, measurements[idx])
+        loss = criterion(torch.sqrt(predicted_intensity), torch.sqrt(measurements[idx]))
         epoch_loss += loss.item()
         
         # Backward pass and optimize per position

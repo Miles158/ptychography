@@ -19,11 +19,11 @@ wavelength = 500e-9
 z_dist = 250e-3 #
 grid_size = 1024
 object_extent = 75e-3 #
-object_fraction = 0.1 # the object takes up a smaller part of the entire object. 
+object_fraction = 0.125 # the object takes up a smaller part of the entire object. 
 grid_spacing = object_extent / grid_size
 probe_radius = 15e-3 
 
-source_intensity = 100000.0 # Units?? 
+source_intensity = 100.0 # Units?? 
 
 # Detector Parameters
 detector_size = 1.5e-3 # 

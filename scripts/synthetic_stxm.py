@@ -2,8 +2,8 @@ import torch
 import matplotlib.pyplot as plt
 import numpy as np
 
-from src import models as models 
-from src import object as objects
+import models as models 
+import object as objects
 
 
 # mps is the apple silicon GPU. "cpu" otherwise, or CUDA if its available.
@@ -126,6 +126,7 @@ plt.scatter(
 )
 plt.gca().set_aspect('equal', 'box')
 plt.title('Reconstruction')
+plt.ticklabel_format(axis='both', style='sci', scilimits=(0,0))
 plt.xlabel('X scan shift (m)')
 plt.ylabel('Y scan shift(m)')
 plt.colorbar()
