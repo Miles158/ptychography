@@ -21,7 +21,7 @@ detector_size = 1.5e-3 #
 probe_radius = 2e-3 # Make probe 4mm (much smaller than the 75mm object!)
 detector_pixels = 512
 desired_overlap = 0.72
-intensity = 100
+intensity = 10000
 
 # Setup coordinate grid
 x = torch.linspace(-object_extent/2, object_extent/2, grid_size, device=device)

@@ -119,13 +119,19 @@ for sweep_idx, (source_intensity, num_epochs) in enumerate(zip(source_intensitie
             # generate the phase delay 
             dm_phase = mirror.forward(dm_commands_error)
             
-            # Combine base probe amplitude with DM phase
-            probe = (probe_amplitude_mask.to(torch.complex64) * dm_phase) * source_intensity
+            # Combine base probe amplitude with DM phase (do NOT scale amplitude directly)
+            probe = (probe_amplitude_mask.to(torch.complex64) * dm_phase)
             
             # No shift (0,0) - diptych relies entirely on the probe phase variations
             detector_intensity = gt_model(probe, pixel_shift_x=0, pixel_shift_y=0)
-            noisy_intensity = helpers.add_shot_noise(detector_intensity)
-            measurements.append(noisy_intensity)
+            
+            # Scale intensity to simulate a specific photon count (source_intensity = max photons per pixel)
+            alpha = source_intensity / detector_intensity.max()
+            photons_expected = detector_intensity * alpha
+            noisy_photons = helpers.add_shot_noise(photons_expected)
+            
+            # Scale back to the model's natural numerical scale for optimization
+            measurements.append(noisy_photons / alpha)
             
     measurements = torch.stack(measurements)
     dm_commands = torch.stack(dm_commands)
@@ -163,7 +169,7 @@ for sweep_idx, (source_intensity, num_epochs) in enumerate(zip(source_intensitie
             # Reconstruct the probe for this specific measurement using the known DM commands
             with torch.no_grad():
                 dm_phase = mirror.forward(dm_commands[idx])
-                probe = (probe_amplitude_mask.to(torch.complex64) * dm_phase) * source_intensity
+                probe = (probe_amplitude_mask.to(torch.complex64) * dm_phase)
             
             # Forward pass (no shift)
             predicted_intensity = model(probe, pixel_shift_x=0, pixel_shift_y=0)

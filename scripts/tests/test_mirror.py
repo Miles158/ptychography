@@ -1,7 +1,7 @@
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
-from src import adaptive_optics as ao
+from ptycho_project import adaptive_optics as ao
 
 def plot_actuators(mirror, annotate=False):
     pts = mirror.actuator_coords.detach().cpu().numpy()  # (N,2)

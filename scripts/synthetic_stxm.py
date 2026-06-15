@@ -16,6 +16,9 @@ grid_spacing = object_extent / grid_size
 wavelength = 500e-9
 z_dist = 250e-3 #
 detector_size = 10e-3 # 15 mm
+probe_radius = 1e-6
+scan_step_meters = 5e-6 # Physical distance (gap) between scan points
+
 
 # Setup coordinate grid
 x = torch.linspace(-object_extent/2, object_extent/2, grid_size, device=device)
@@ -41,10 +44,8 @@ X, Y = torch.meshgrid(x, y, indexing='xy')
 
 # Probe parameters
 # STXM requires a small, focused probe. Let's use 50um.
-probe_radius = 1e-6
 
 # Generate synthetic measurements by scanning the illumination over the unpadded core region
-scan_step_meters = 5e-6 # Physical distance (gap) between scan points
 shift_step = max(1, int(scan_step_meters / grid_spacing)) # step size in pixels
 
 # Calculate number of scan positions to cover the unpadded core region

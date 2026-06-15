@@ -19,11 +19,11 @@ wavelength = 500e-9
 z_dist = 250e-3 #
 grid_size = 1024
 object_extent = 75e-3 #
-object_fraction = 0.125 # the object takes up a smaller part of the entire object. 
+object_fraction = 0.2 # the object takes up a smaller part of the entire object. 
 grid_spacing = object_extent / grid_size
 probe_radius = 15e-3 
 
-source_intensity = 100.0 # Units?? 
+source_intensity = 100000.0 # Units?? 
 
 # Detector Parameters
 detector_size = 1.5e-3 # 
@@ -37,7 +37,7 @@ num_actuators = 16
 
 # Optimization
 num_measurements = 20
-num_epochs = 250
+num_epochs = 160
 
 
 # Setup coordinate grid
@@ -74,7 +74,7 @@ mirror = ao.deformableMirror(
 print(f"Generating synthetic data for {num_measurements} random DM configurations...")
 
 # We use the true physics to generate our "experimental" data
-gt_model = models.PtychoModel(
+gt_model = models.DiptychModel(
     grid_size_object=grid_size, 
     grid_spacing_object=grid_spacing, 
     wavelength=wavelength, 
@@ -92,21 +92,21 @@ dm_commands = []
 
 with torch.no_grad():
     for i in range(num_measurements):
+
         # Generate random actuator commands [-1, 1]
         commands = (torch.rand(num_actuators, device=device) * 2) - 1
         dm_commands.append(commands)
         dm_commands_error = helpers.add_actuator_jitter(commands, actuator_jitter)
         
-        # generate the phase delay 
-        dm_phase = mirror.forward(dm_commands_error)
+        # Scale illumination so that intensity natively matches the photon count world
+        illumination = probe_amplitude_mask.to(torch.complex64) * torch.sqrt(torch.tensor(source_intensity, device=device))
         
-        # Combine base probe amplitude with DM phase
-        probe = (probe_amplitude_mask.to(torch.complex64) * dm_phase) * source_intensity
+        # No shift (0,0) - diptych relies entirely on the probe phase variations from DM
+        detector_intensity = gt_model(illumination, dm_commands_error, mirror)
         
-        # No shift (0,0) - diptych relies entirely on the probe phase variations
-        detector_intensity = gt_model(probe, pixel_shift_x=0, pixel_shift_y=0)
-        noisy_intensity = helpers.add_shot_noise(detector_intensity)
-        measurements.append(noisy_intensity)
+        # Add Poisson shot noise naturally on the photon counts
+        noisy_photons = helpers.add_shot_noise(detector_intensity)
+        measurements.append(detector_intensity)
         
 measurements = torch.stack(measurements)
 dm_commands = torch.stack(dm_commands)
@@ -114,7 +114,7 @@ dm_commands = torch.stack(dm_commands)
 print("Measurements generated. Starting optimization...")
 
 # --- 2. Initialize the Reconstruction Model ---
-model = models.PtychoModel(
+model = models.DiptychModel(
     grid_size_object=grid_size, 
     grid_spacing_object=grid_spacing, 
     wavelength=wavelength, 
@@ -128,7 +128,7 @@ model.object_amplitude.data = torch.ones((grid_size, grid_size), dtype=torch.flo
 model.object_phase.data = torch.zeros((grid_size, grid_size), dtype=torch.float32, device=device)
 
 # --- 3. Setup Optimizer ---
-optimizer = optim.AdamW(model.parameters(), lr=0.1)
+optimizer = optim.AdamW(model.parameters(), lr=0.025)
 criterion = nn.MSELoss()
 
 loss_history = []
@@ -141,13 +141,11 @@ for epoch in range(num_epochs):
     for idx in range(num_measurements):
         optimizer.zero_grad()
         
-        # Reconstruct the probe for this specific measurement using the known DM commands
-        with torch.no_grad():
-            dm_phase = mirror.forward(dm_commands[idx])
-            probe = (probe_amplitude_mask.to(torch.complex64) * dm_phase) * source_intensity
+        # Base illumination scaled to match the photon count scale
+        illumination = probe_amplitude_mask.to(torch.complex64) * torch.sqrt(torch.tensor(source_intensity, device=device))
         
-        # Forward pass (no shift)
-        predicted_intensity = model(probe, pixel_shift_x=0, pixel_shift_y=0)
+        # Forward pass using the DM commands (the model natively handles the mirror and propagation)
+        predicted_intensity = model(illumination, dm_commands[idx], mirror)
         
         # Calculate loss against the measurement (using amplitude instead of raw photon intensity)
         # This stabilizes optimization when dealing with very large integer photon counts.
