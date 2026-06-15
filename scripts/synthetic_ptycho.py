@@ -11,26 +11,32 @@ import helpers
 device = "mps"
 
 # --- 1. Setup Simulation Parameters ---
-# The model's grid size defines the fully padded simulation space
-grid_size = 1024
-object_extent = 75e-3 #
-grid_spacing = object_extent / grid_size
+# General Parameters
 wavelength = 500e-9
 z_dist = 250e-3 #
-detector_size = 1.5e-3 # 
-probe_radius = 2e-3 # Make probe 4mm (much smaller than the 75mm object!)
-detector_pixels = 512
+grid_size = 1024
+object_extent = 5e-3 #
+object_fraction = 0.5 # the object takes up a smaller part of the entire object. 
+grid_spacing = object_extent / grid_size
+
+probe_radius = 0.35e-3 # Make probe smaller than the 5mm object for scanning
 desired_overlap = 0.72
-intensity = 10000
+
+source_intensity = 10000 
+num_epochs = 25
+
+# Detector Parameters
+detector_size = 1.5e-3 # 
+detector_pixels = 1024
 
 # Setup coordinate grid
 x = torch.linspace(-object_extent/2, object_extent/2, grid_size, device=device)
 y = torch.linspace(-object_extent/2, object_extent/2, grid_size, device=device)
 X, Y = torch.meshgrid(x, y, indexing='xy')
 
-# --- usage ---
-core_grid_size = 128
-gt_object = obj.make_siemens_star_mask(core_grid_size, num_sectors=32, margin=0.01, line_fractio=1.0, center_radius_frac=0.0, device=device)
+# make the object 
+core_grid_size = int(grid_size * object_fraction)
+gt_object = obj.make_siemens_star_mask(core_grid_size, num_sectors=32, margin=0.01, line_fraction=1.0, center_radius_frac=0.0, device=device)
 
 
 
@@ -52,7 +58,9 @@ r = torch.sqrt(X**2 + Y**2)  # uses your existing X, Y in meters
 
 phi0 = 0.0
 mask = (r <= probe_radius).to(torch.float32)  # top-hat aperture
-probe = (mask.to(torch.complex64) * torch.exp(torch.tensor(1j * phi0))) * intensity
+
+# Scale illumination so that intensity natively matches the photon count world
+probe = mask.to(torch.complex64) * torch.sqrt(torch.tensor(source_intensity, device=device)) * torch.exp(torch.tensor(1j * phi0, device=device))
 
 
 probe_diameter = 2 * probe_radius
@@ -113,7 +121,6 @@ recon_model.object_phase.data = torch.zeros((grid_size, grid_size), dtype=torch.
 optimizer = optim.AdamW(recon_model.parameters(), lr=0.01)
 criterion = nn.MSELoss()
 
-num_epochs = 60
 loss_history = []
 
 # --- 4. Optimization Loop ---
@@ -127,8 +134,8 @@ for epoch in range(num_epochs):
         # Forward pass
         predicted_intensity = recon_model(probe, pixel_shift_x=shift_x, pixel_shift_y=shift_y)
         
-        # Calculate loss against the measurement
-        loss = criterion(torch.sqrt(predicted_intensity), torch.sqrt(measurements[idx]))
+        # Calculate loss against the measurement (using amplitude and stabilization)
+        loss = criterion(torch.sqrt(predicted_intensity + 1e-12), torch.sqrt(measurements[idx] + 1e-12))
         epoch_loss += loss.item()
         
         # Backward pass and optimize per position

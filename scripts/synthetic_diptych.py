@@ -18,26 +18,26 @@ device = "mps"
 wavelength = 500e-9
 z_dist = 250e-3 #
 grid_size = 1024
-object_extent = 33e-3 #
-object_fraction = 0.75 # the object takes up a smaller part of the entire object. 
+object_extent = 5e-3 #
+object_fraction = 0.5 # the object takes up a smaller part of the entire object. 
 grid_spacing = object_extent / grid_size
 probe_radius = 15e-3 
 
-source_intensity = 100000 # Units?? 
+source_intensity = 10000 # Units?? 
 
 # Detector Parameters
 detector_size = 1.5e-3 # 
-detector_pixels = 512
+detector_pixels = 1024
 
 # Mirror Parameters
 mirror_radius = probe_radius
 actuator_max_stroke = 250e-9
 actuator_jitter = 0.025 # careful with this, its in the normalized actuator commands [-1,1]
-num_actuators = 16
+num_actuators = 24
 
 # Optimization
-num_measurements = 20
-num_epochs = 100
+num_measurements = 170
+num_epochs = 25
 
 
 # Setup coordinate grid
@@ -110,7 +110,7 @@ with torch.no_grad():
         
         # Add Poisson shot noise naturally on the photon counts
         noisy_photons = helpers.add_shot_noise(detector_intensity)
-        measurements.append(detector_intensity + noisy_photons)
+        measurements.append(noisy_photons)
         
 measurements = torch.stack(measurements)
 dm_commands = torch.stack(dm_commands)
@@ -132,7 +132,7 @@ model.object_amplitude.data = torch.ones((grid_size, grid_size), dtype=torch.flo
 model.object_phase.data = torch.zeros((grid_size, grid_size), dtype=torch.float32, device=device)
 
 # --- 3. Setup Optimizer ---
-optimizer = optim.AdamW(model.parameters(), lr=0.05)
+optimizer = optim.AdamW(model.parameters(), lr=0.01)
 criterion = nn.MSELoss()
 
 loss_history = []

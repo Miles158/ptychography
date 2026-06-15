@@ -18,22 +18,23 @@ device = "mps"
 
 # --- 1. Setup Simulation Parameters ---
 
+device = "mps" 
+
+# --- 1. Setup Simulation Parameters ---
+
 # General Parameters
 wavelength = 500e-9
 z_dist = 250e-3 #
 grid_size = 1024
-object_extent = 75e-3 #
-object_fraction = 0.125 # the object takes up a smaller part of the entire object. 
+object_extent = 33e-3 #
+object_fraction = 0.75 # the object takes up a smaller part of the entire object. 
 grid_spacing = object_extent / grid_size
 probe_radius = 15e-3 
 
-# Sweep Parameters
-source_intensities = [1e2, 1e3, 1e4, 1e5, 1e6, 1e7] # Sweep through photon counts
-num_epochs_list = [400, 400, 400, 400, 400]    # Number of epochs per intensity run
 
 # Detector Parameters
 detector_size = 1.5e-3 # 
-detector_pixels = 512
+detector_pixels = 1024
 
 # Mirror Parameters
 mirror_radius = probe_radius
@@ -43,6 +44,10 @@ num_actuators = 16
 
 # Optimization
 num_measurements = 20
+
+
+source_intensities = [1e2, 1e3, 1e4, 1e5, 1e6, 1e7] # Sweep through photon counts
+num_epochs_list = [400, 400, 400, 400, 400]    # Number of epochs per intensity run
 
 # Setup coordinate grid
 x = torch.linspace(-object_extent/2, object_extent/2, grid_size, device=device)

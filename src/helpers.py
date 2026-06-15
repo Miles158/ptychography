@@ -22,17 +22,12 @@ def add_actuator_jitter(commands, max_residual_error: float):
     return out
 
 def add_shot_noise(measurement):
-    # mu = measurement.clamp_min(0).cpu()
-    
-    # # Use PyTorch's native Poisson distribution generator for physically accurate shot noise
-    # # This correctly handles both high intensity (where it approaches Gaussian)
-    # # AND low intensity (where it correctly generates integer 0, 1, 2... counts)
-    # noisy_measurement = torch.randn(mu).to(measurement.device)
-    
-    # return noisy_measurement
     mu = measurement.clamp_min(0)
     eps = 1e-12
 
-    noise = torch.sqrt(mu.clamp_min(eps)) * torch.randn_like(mu)
-    return torch.poisson((mu.cpu())).to(measurement.device)
-    return (noise).clamp_min(0.0)
+    noise_component = torch.sqrt(mu.clamp_min(eps)) * torch.randn_like(mu)
+    gaussian_noisy = (mu + noise_component).clamp_min(0.0)
+    
+
+    return torch.poisson(mu.cpu()).to(measurement.device)
+    return gaussian_noisy
