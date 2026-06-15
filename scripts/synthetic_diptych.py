@@ -19,11 +19,11 @@ wavelength = 500e-9
 z_dist = 250e-3 #
 grid_size = 1024
 object_extent = 5e-3 #
-object_fraction = 0.5 # the object takes up a smaller part of the entire object. 
+object_fraction = 0.75 # the object takes up a smaller part of the entire object. 
 grid_spacing = object_extent / grid_size
 probe_radius = 15e-3 
 
-source_intensity = 10000 # Units?? 
+source_intensity = 0.001 # Units?? 
 
 # Detector Parameters
 detector_size = 1.5e-3 # 
@@ -31,12 +31,12 @@ detector_pixels = 1024
 
 # Mirror Parameters
 mirror_radius = probe_radius
-actuator_max_stroke = 250e-9
-actuator_jitter = 0.025 # careful with this, its in the normalized actuator commands [-1,1]
+actuator_max_stroke = 500e-9
+actuator_jitter = 0.01 # careful with this, its in the normalized actuator commands [-1,1]
 num_actuators = 24
 
 # Optimization
-num_measurements = 170
+num_measurements = 20
 num_epochs = 25
 
 

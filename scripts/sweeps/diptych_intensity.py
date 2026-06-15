@@ -16,9 +16,7 @@ from src import helpers as helpers
 
 device = "mps" 
 
-# --- 1. Setup Simulation Parameters ---
 
-device = "mps" 
 
 # --- 1. Setup Simulation Parameters ---
 
@@ -26,7 +24,7 @@ device = "mps"
 wavelength = 500e-9
 z_dist = 250e-3 #
 grid_size = 1024
-object_extent = 33e-3 #
+object_extent = 32e-3 #
 object_fraction = 0.75 # the object takes up a smaller part of the entire object. 
 grid_spacing = object_extent / grid_size
 probe_radius = 15e-3 
@@ -38,16 +36,16 @@ detector_pixels = 1024
 
 # Mirror Parameters
 mirror_radius = probe_radius
-actuator_max_stroke = 250e-9
-actuator_jitter = 0.025 # careful with this, its in the normalized actuator commands [-1,1]
-num_actuators = 16
+actuator_max_stroke = 500e-9
+actuator_jitter = 0.01 # careful with this, its in the normalized actuator commands [-1,1]
+num_actuators = 24
 
 # Optimization
-num_measurements = 20
+num_measurements = 40
 
 
-source_intensities = [1e2, 1e3, 1e4, 1e5, 1e6, 1e7] # Sweep through photon counts
-num_epochs_list = [400, 400, 400, 400, 400]    # Number of epochs per intensity run
+source_intensities = [0.00001, 0.0001, 0.001, 0.01, 0.1] # Sweep through photon counts
+num_epochs_list = [150, 150, 150, 150, 150]    # Number of epochs per intensity run
 
 # Setup coordinate grid
 x = torch.linspace(-object_extent/2, object_extent/2, grid_size, device=device)
@@ -57,6 +55,7 @@ X, Y = torch.meshgrid(x, y, indexing='xy')
 # make the object 
 core_grid_size = int(grid_size * object_fraction)
 gt_object = obj.make_text_mask("ALS", core_grid_size, margin=0.01, stroke_frac=0.01, font_name="Helvetica", device=device)
+gt_object = obj.make_siemens_star_mask(core_grid_size, num_sectors=32, margin=0.01, line_fraction=1.0, center_radius_frac=0.0, device=device)
 # Zero-pad the object up to the full simulation grid size
 pad_pixels = (grid_size - core_grid_size) // 2
 gt_object = torch.nn.functional.pad(gt_object, (pad_pixels, pad_pixels, pad_pixels, pad_pixels), mode='constant', value=0.0)
@@ -83,7 +82,7 @@ mirror = ao.deformableMirror(
 print(f"Generating synthetic data for {num_measurements} random DM configurations...")
 
 # We use the true physics to generate our "experimental" data
-gt_model = models.PtychoModel(
+gt_model = models.DiptychModel(
     grid_size_object=grid_size, 
     grid_spacing_object=grid_spacing, 
     wavelength=wavelength, 
@@ -129,7 +128,7 @@ for sweep_idx, (source_intensity, num_epochs) in enumerate(zip(source_intensitie
             
             # Add Poisson shot noise naturally on the photon counts
             noisy_photons = helpers.add_shot_noise(detector_intensity)
-            measurements.append(detector_intensity + noisy_photons)
+            measurements.append(noisy_photons)
             
     measurements = torch.stack(measurements)
     dm_commands = torch.stack(dm_commands)
@@ -137,7 +136,7 @@ for sweep_idx, (source_intensity, num_epochs) in enumerate(zip(source_intensitie
     print("Measurements generated. Starting optimization...")
 
     # --- 2. Initialize the Reconstruction Model (Fresh for each sweep) ---
-    model = models.PtychoModel(
+    model = models.DiptychModel(
         grid_size_object=grid_size, 
         grid_spacing_object=grid_spacing, 
         wavelength=wavelength, 
@@ -227,7 +226,7 @@ plt.grid(True, alpha=0.3)
 
 plt.tight_layout()
 os.makedirs('plots', exist_ok=True)
-plt.savefig('plots/diptych_intensity_sweep.png', dpi=200)
+plt.savefig('plots/diptych_intensity_sweep.png', dpi=400)
 print("\nSaved sweep results to 'plots/diptych_intensity_sweep.png'")
 
 
@@ -245,7 +244,7 @@ plot_extent = (-object_extent/2, object_extent/2, -object_extent/2, object_exten
 
 for i in range(n_sweeps):
     ax = axes[i]
-    im = ax.imshow(all_recon_amplitudes[i], extent=plot_extent, origin='lower', cmap='gray')
+    im = ax.imshow(all_recon_amplitudes[i], extent=plot_extent, origin='lower', cmap='inferno')
     ax.set_title(f"Intensity: {source_intensities[i]:.1e}\nMSE: {reconstruction_mse_list[i]:.4e}")
     ax.set_xlabel('x (m)')
     ax.set_ylabel('y (m)')
@@ -256,6 +255,6 @@ for i in range(n_sweeps, len(axes)):
     axes[i].set_visible(False)
 
 plt.tight_layout()
-plt.savefig('plots/diptych_intensity_reconstructions.png', dpi=200)
+plt.savefig('plots/diptych_intensity_reconstructions.png', dpi=400)
 print("Saved reconstruction tableau to 'plots/diptych_intensity_reconstructions.png'")
 

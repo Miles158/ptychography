@@ -19,11 +19,11 @@ object_extent = 5e-3 #
 object_fraction = 0.5 # the object takes up a smaller part of the entire object. 
 grid_spacing = object_extent / grid_size
 
-probe_radius = 0.35e-3 # Make probe smaller than the 5mm object for scanning
+probe_radius = 0.25e-3 # Make probe smaller than the 5mm object for scanning
 desired_overlap = 0.72
 
 source_intensity = 10000 
-num_epochs = 25
+num_epochs = 35
 
 # Detector Parameters
 detector_size = 1.5e-3 # 
