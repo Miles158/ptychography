@@ -66,3 +66,62 @@ def make_text_mask(text, grid_size, margin=0., stroke_frac=0.01, font_name="Helv
     mask = (np.array(img) > 128).astype(np.float32)
 
     return torch.from_numpy(mask).to(torch.complex64).to(device)
+
+
+def make_siemens_star_mask(
+    grid_size,
+    num_sectors=64,        # number of converging "spokes" / angular segments
+    margin=0.0,            # keep pattern inside (like make_text_mask's margin)
+    line_fraction=1.0,    # 1.0 = fill whole sector (classic star); <1.0 = thinner wedges
+    center_radius_frac=0.0, # remove/blank central disk as fraction of radius (0..1)
+    device="cpu"
+):
+    """
+    Creates a Siemens-star-like binary mask (0/1) inside an outer circle.
+
+    Returns: complex64 tensor of shape (grid_size, grid_size).
+    """
+    # Coordinate grid centered at (0,0)
+    # Use pixel-center coordinates so the pattern is symmetric.
+    coords = torch.arange(grid_size, device=device, dtype=torch.float32) - (grid_size - 1) / 2
+    X, Y = torch.meshgrid(coords, coords, indexing='xy')
+
+    r = torch.sqrt(X**2 + Y**2)
+
+    # Outer radius based on margin, matching idea of (1 - 2*margin)*grid_size usable
+    outer_radius = (grid_size / 2.0) * (1.0 - margin)
+
+    # Angle in [0, 2pi)
+    theta = torch.atan2(Y, X)  # [-pi, pi]
+    theta = (theta + 2.0 * np.pi) % (2.0 * np.pi)
+
+    # Map angle to sector index and position within sector
+    u = theta / (2.0 * np.pi) * num_sectors  # continuous
+    sector_index = torch.floor(u).to(torch.int64)
+    frac = u - sector_index.to(torch.float32)  # [0,1)
+
+    # Within-sector angular coordinate centered at 0: d in [-0.5, 0.5]
+    d = frac - 0.5
+
+    # If line_fraction=1.0 -> full sector filled.
+    # If smaller -> only a central wedge is "ON" (thinner lines).
+    half_width = 0.5 * float(line_fraction)
+    wedge_on = (d.abs() <= half_width)
+
+    # Classic Siemens star alternates black/white sectors
+    # (sector parity chooses which adjacent sector is "white")
+    mask = ((sector_index % 2) == 0) & wedge_on
+
+    # Apply outer circle support
+    mask = mask & (r <= outer_radius)
+
+    # Optionally blank the center
+    if center_radius_frac > 0:
+        inner_radius = outer_radius * float(center_radius_frac)
+        mask = mask & (r >= inner_radius)
+
+    # Match your text mask orientation (you flip FLIP_TOP_BOTTOM there)
+    mask = torch.flip(mask, dims=[0])
+
+    mask = mask.to(torch.float32)
+    return mask.to(torch.complex64)

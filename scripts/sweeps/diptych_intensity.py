@@ -116,22 +116,15 @@ for sweep_idx, (source_intensity, num_epochs) in enumerate(zip(source_intensitie
             dm_commands.append(commands)
             dm_commands_error = helpers.add_actuator_jitter(commands, actuator_jitter)
             
-            # generate the phase delay 
-            dm_phase = mirror.forward(dm_commands_error)
+            # Scale illumination so that intensity natively matches the photon count world
+            illumination = probe_amplitude_mask.to(torch.complex64) * torch.sqrt(torch.tensor(source_intensity, device=device))
             
-            # Combine base probe amplitude with DM phase (do NOT scale amplitude directly)
-            probe = (probe_amplitude_mask.to(torch.complex64) * dm_phase)
+            # No shift (0,0) - diptych relies entirely on the probe phase variations from DM
+            detector_intensity = gt_model(illumination, dm_commands_error, mirror)
             
-            # No shift (0,0) - diptych relies entirely on the probe phase variations
-            detector_intensity = gt_model(probe, pixel_shift_x=0, pixel_shift_y=0)
-            
-            # Scale intensity to simulate a specific photon count (source_intensity = max photons per pixel)
-            alpha = source_intensity / detector_intensity.max()
-            photons_expected = detector_intensity * alpha
-            noisy_photons = helpers.add_shot_noise(photons_expected)
-            
-            # Scale back to the model's natural numerical scale for optimization
-            measurements.append(noisy_photons / alpha)
+            # Add Poisson shot noise naturally on the photon counts
+            noisy_photons = helpers.add_shot_noise(detector_intensity)
+            measurements.append(detector_intensity + noisy_photons)
             
     measurements = torch.stack(measurements)
     dm_commands = torch.stack(dm_commands)
@@ -165,16 +158,15 @@ for sweep_idx, (source_intensity, num_epochs) in enumerate(zip(source_intensitie
         # Process each DM configuration
         for idx in range(num_measurements):
             optimizer.zero_grad()
+        
+            # Base illumination scaled to match the photon count scale
+            illumination = probe_amplitude_mask.to(torch.complex64) * torch.sqrt(torch.tensor(source_intensity, device=device))
             
-            # Reconstruct the probe for this specific measurement using the known DM commands
-            with torch.no_grad():
-                dm_phase = mirror.forward(dm_commands[idx])
-                probe = (probe_amplitude_mask.to(torch.complex64) * dm_phase)
-            
-            # Forward pass (no shift)
-            predicted_intensity = model(probe, pixel_shift_x=0, pixel_shift_y=0)
+            # Forward pass using the DM commands (the model natively handles the mirror and propagation)
+            predicted_intensity = model(illumination, dm_commands[idx], mirror)
             
             # Calculate loss against the measurement (using amplitude instead of raw photon intensity)
+            # This stabilizes optimization when dealing with very large integer photon counts.
             loss = criterion(torch.sqrt(predicted_intensity + 1e-12), torch.sqrt(measurements[idx] + 1e-12))
             epoch_loss += loss.item()
             

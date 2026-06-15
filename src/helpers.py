@@ -34,4 +34,5 @@ def add_shot_noise(measurement):
     eps = 1e-12
 
     noise = torch.sqrt(mu.clamp_min(eps)) * torch.randn_like(mu)
+    return torch.poisson((mu.cpu())).to(measurement.device)
     return (noise).clamp_min(0.0)

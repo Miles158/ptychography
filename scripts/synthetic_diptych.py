@@ -18,12 +18,12 @@ device = "mps"
 wavelength = 500e-9
 z_dist = 250e-3 #
 grid_size = 1024
-object_extent = 75e-3 #
-object_fraction = 0.2 # the object takes up a smaller part of the entire object. 
+object_extent = 33e-3 #
+object_fraction = 0.75 # the object takes up a smaller part of the entire object. 
 grid_spacing = object_extent / grid_size
 probe_radius = 15e-3 
 
-source_intensity = 100000.0 # Units?? 
+source_intensity = 100000 # Units?? 
 
 # Detector Parameters
 detector_size = 1.5e-3 # 
@@ -37,7 +37,7 @@ num_actuators = 16
 
 # Optimization
 num_measurements = 20
-num_epochs = 160
+num_epochs = 100
 
 
 # Setup coordinate grid
@@ -48,6 +48,10 @@ X, Y = torch.meshgrid(x, y, indexing='xy')
 # make the object 
 core_grid_size = int(grid_size * object_fraction)
 gt_object = obj.make_text_mask("ALS", core_grid_size, margin=0.01, stroke_frac=0.01, font_name="Helvetica", device=device)
+gt_object = obj.make_siemens_star_mask(core_grid_size, num_sectors=32, margin=0.01, line_fraction=1.0, center_radius_frac=0.0, device=device)
+
+
+
 # Zero-pad the object up to the full simulation grid size
 pad_pixels = (grid_size - core_grid_size) // 2
 gt_object = torch.nn.functional.pad(gt_object, (pad_pixels, pad_pixels, pad_pixels, pad_pixels), mode='constant', value=0.0)
@@ -106,7 +110,7 @@ with torch.no_grad():
         
         # Add Poisson shot noise naturally on the photon counts
         noisy_photons = helpers.add_shot_noise(detector_intensity)
-        measurements.append(detector_intensity)
+        measurements.append(detector_intensity + noisy_photons)
         
 measurements = torch.stack(measurements)
 dm_commands = torch.stack(dm_commands)
@@ -128,7 +132,7 @@ model.object_amplitude.data = torch.ones((grid_size, grid_size), dtype=torch.flo
 model.object_phase.data = torch.zeros((grid_size, grid_size), dtype=torch.float32, device=device)
 
 # --- 3. Setup Optimizer ---
-optimizer = optim.AdamW(model.parameters(), lr=0.025)
+optimizer = optim.AdamW(model.parameters(), lr=0.05)
 criterion = nn.MSELoss()
 
 loss_history = []
@@ -206,7 +210,7 @@ plt.ylabel('(m)')
 plt.colorbar()
 
 plt.tight_layout()
-plt.savefig('diptych_reconstruction.png')
+plt.savefig('diptych_reconstruction.png', dpi=500)
 print("Saved reconstruction results to 'diptych_reconstruction.png'")
 
 

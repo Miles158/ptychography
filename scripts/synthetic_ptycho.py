@@ -30,7 +30,10 @@ X, Y = torch.meshgrid(x, y, indexing='xy')
 
 # --- usage ---
 core_grid_size = 128
-gt_object = obj.make_text_mask("A", core_grid_size, margin=0.01, stroke_frac=0.01, font_name="Helvetica", device=device)
+gt_object = obj.make_siemens_star_mask(core_grid_size, num_sectors=32, margin=0.01, line_fractio=1.0, center_radius_frac=0.0, device=device)
+
+
+
 
 # Zero-pad the object up to the full simulation grid size
 pad_pixels = (grid_size - core_grid_size) // 2
