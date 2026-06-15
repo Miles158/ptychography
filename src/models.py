@@ -140,6 +140,7 @@ class DiptychModel(nn.Module):
         wavelength,
         z_dist,
         detector_size=None,
+        detector_pixels=None,
         device="cpu",
     ):
         """Create the ptychography model."""
@@ -149,6 +150,7 @@ class DiptychModel(nn.Module):
         self.wavelength = wavelength
         self.z_dist = z_dist
         self.detector_size = detector_size
+        self.detector_pixels = detector_pixels
         self.device = device
 
         self.grid_spacing_detector = (
@@ -199,14 +201,9 @@ class DiptychModel(nn.Module):
 
         # 2. act on the wavefront with the deformable mirror
 
-
-        mirror_response = mirror_instance.deformableMirror(actuator_commands)  # meters
-
+        mirror_response = mirror_instance.forward(actuator_commands)  # meters
 
         reflected_illumination = illumination.to(torch.complex64) * mirror_response
-
-
-        # 2. act on the wavefront with the deformable mirror
 
         # 3. interaction with the object
         exit_wavefront = reflected_illumination * complex_object
@@ -223,12 +220,13 @@ class DiptychModel(nn.Module):
                 f"Warning: the calculated diffraction pattern {self.grid_spacing_detector * detector_wave.size(0)} is smaller than the specified detector size."
             )
 
-        # 5. Capture the expected intensity at the detector
-        predicted_intensity = prop.capture_diffraction(
+        predicted_intensity = prop.capture_diffraction_downsample(
             wavefront=detector_wave,
             grid_spacing_detector=self.grid_spacing_detector,
             detector_size=self.detector_size,
+            detector_pixels=self.detector_pixels
         )
+
 
         return predicted_intensity
 
