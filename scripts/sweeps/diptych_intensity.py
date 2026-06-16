@@ -41,12 +41,11 @@ actuator_jitter = 0.01 # careful with this, its in the normalized actuator comma
 num_actuators = 24
 
 # Optimization
-num_measurements = 40
+num_measurements = 25
 
 
-source_intensities = [0.00001, 0.0001, 0.001, 0.01, 0.1] # Sweep through photon counts
-num_epochs_list = [150, 150, 150, 150, 150]    # Number of epochs per intensity run
-
+source_intensities = [1e1, 1e2, 1e3, 1e4, 1e5] # Sweep through peak photon counts
+num_epochs_list = [150, 150, 150, 150, 150]   # Number of epochs per intensity run
 # Setup coordinate grid
 x = torch.linspace(-object_extent/2, object_extent/2, grid_size, device=device)
 y = torch.linspace(-object_extent/2, object_extent/2, grid_size, device=device)
@@ -110,7 +109,7 @@ for sweep_idx, (source_intensity, num_epochs) in enumerate(zip(source_intensitie
     print(f"=========================================================")
     
     # Collect measurements
-    measurements = []
+    raw_intensities = []
     dm_commands = []
 
     with torch.no_grad():
@@ -120,19 +119,33 @@ for sweep_idx, (source_intensity, num_epochs) in enumerate(zip(source_intensitie
             dm_commands.append(commands)
             dm_commands_error = helpers.add_actuator_jitter(commands, actuator_jitter)
             
-            # Scale illumination so that intensity natively matches the photon count world
-            illumination = probe_amplitude_mask.to(torch.complex64) * torch.sqrt(torch.tensor(source_intensity, device=device))
+            # Keep illumination in arbitrary units (amplitude of 1 inside the probe)
+            illumination = probe_amplitude_mask.to(torch.complex64)
             
             # No shift (0,0) - diptych relies entirely on the probe phase variations from DM
             detector_intensity = gt_model(illumination, dm_commands_error, mirror)
+            raw_intensities.append(detector_intensity)
             
+    # Find global max across all measurements
+    raw_intensities = torch.stack(raw_intensities)
+    global_max_intensity = raw_intensities.max()
+
+    # Scale all intensities such that the maximum pixel across all measurements matches source_intensity
+    scale_factor = source_intensity / global_max_intensity
+
+    measurements = []
+    with torch.no_grad():
+        for raw_int in raw_intensities:
+            scaled_intensity = raw_int * scale_factor
             # Add Poisson shot noise naturally on the photon counts
-            noisy_photons = helpers.add_shot_noise(detector_intensity)
+            noisy_photons = helpers.add_shot_noise(scaled_intensity)
             measurements.append(noisy_photons)
             
     measurements = torch.stack(measurements)
     dm_commands = torch.stack(dm_commands)
 
+    print(f"Global max before scaling: {global_max_intensity:.4e}")
+    print(f"Scaling factor (alpha): {scale_factor:.4e}")
     print("Measurements generated. Starting optimization...")
 
     # --- 2. Initialize the Reconstruction Model (Fresh for each sweep) ---
@@ -150,7 +163,7 @@ for sweep_idx, (source_intensity, num_epochs) in enumerate(zip(source_intensitie
     model.object_phase.data = torch.zeros((grid_size, grid_size), dtype=torch.float32, device=device)
 
     # --- 3. Setup Optimizer ---
-    optimizer = optim.AdamW(model.parameters(), lr=0.1)
+    optimizer = optim.AdamW(model.parameters(), lr=0.01)
     criterion = nn.MSELoss()
 
     loss_history = []
@@ -163,11 +176,14 @@ for sweep_idx, (source_intensity, num_epochs) in enumerate(zip(source_intensitie
         for idx in range(num_measurements):
             optimizer.zero_grad()
         
-            # Base illumination scaled to match the photon count scale
-            illumination = probe_amplitude_mask.to(torch.complex64) * torch.sqrt(torch.tensor(source_intensity, device=device))
+            # Base illumination in arbitrary units
+            illumination = probe_amplitude_mask.to(torch.complex64)
             
             # Forward pass using the DM commands (the model natively handles the mirror and propagation)
-            predicted_intensity = model(illumination, dm_commands[idx], mirror)
+            predicted_intensity_raw = model(illumination, dm_commands[idx], mirror)
+            
+            # Scale the predicted intensity by the exact same alpha factor so it matches the photon count domain
+            predicted_intensity = predicted_intensity_raw * scale_factor
             
             # Calculate loss against the measurement (using amplitude instead of raw photon intensity)
             # This stabilizes optimization when dealing with very large integer photon counts.
@@ -217,8 +233,8 @@ plt.grid(True, alpha=0.3)
 # Plot 2: Reconstruction MSE vs Intensity
 plt.subplot(1, 2, 2)
 plt.plot(source_intensities, reconstruction_mse_list, marker='o', linewidth=2, markersize=8)
-plt.title('Reconstruction Quality vs Source Intensity')
-plt.xlabel('Source Intensity (Photons)')
+plt.title('Reconstruction Quality vs Peak Intensity')
+plt.xlabel('Peak Measurment Intensity')
 plt.ylabel('Core Object MSE')
 plt.xscale('log')
 plt.yscale('log')
