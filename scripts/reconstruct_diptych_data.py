@@ -13,6 +13,7 @@ from src import adaptive_optics as ao
 
 device = "mps" 
 
+
 # --- 1. Load the generated dataset ---
 data_path = os.path.join(os.path.dirname(__file__), '../data/synthetic/diptych_dataset_001.pt')
 print(f"Loading dataset from {data_path}...")
@@ -27,17 +28,17 @@ scale_factor = dataset["scale_factor"]
 if isinstance(scale_factor, torch.Tensor):
     scale_factor = scale_factor.to(device)
 
-source_intensity = dataset["source_intensity"]
-wavelength = dataset["wavelength"]
-z_dist = dataset["z_dist"]
+source_intensity = dataset["measure_max_photon"]
+wavelength = dataset["wavelength_m"]
+z_dist = dataset["z_dist_m"]
 grid_size = dataset["grid_size"]
-object_extent = dataset["object_extent"]
-grid_spacing = dataset["grid_spacing"]
-detector_size = dataset["detector_size"]
+object_extent = dataset["object_extent_m"]
+grid_spacing = dataset["grid_spacing_m"]
+detector_size = dataset["detector_size_m"]
 detector_pixels = dataset["detector_pixels"]
 
-mirror_radius = dataset["mirror_radius"]
-actuator_max_stroke = dataset["actuator_max_stroke"]
+mirror_radius = dataset["mirror_radius_m"]
+actuator_max_stroke = dataset["actuator_max_stroke_m"]
 num_actuators = dataset["num_actuators"]
 
 num_measurements = measurements.shape[0]

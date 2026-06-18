@@ -63,13 +63,42 @@ def fresnel_propagate(wavefront, z_dist, grid_spacing, wavelength):
 
     return torch.fft.ifft2(wavefront_transferred)
 
+def huygens_propagate(
+        wavefront, 
+        z_dist_m,
+        grid_spacing_object_m,
+        wavelength_m
+):
+    ny, nx = wavefront.shape
+    device = wavefront.device
+    k = 2 * torch.pi / wavelength_m
 
+
+    wavefront_ft = torch.fft.fftshift(torch.fft.fft2(wavefront))
+    fx = torch.fft.fftshift(torch.fft.fftfreq(nx, d=grid_spacing_object_m, device=device))
+    fy = torch.fft.fftshift(torch.fft.fftfreq(ny, d=grid_spacing_object_m, device=device))
+    FX, FY = torch.meshgrid(fx, fy, indexing="xy")
+
+    # 1. Prevent NaNs: Evanescent waves create negative values inside the sqrt.
+    # torch.sqrt on negative real numbers yields NaN, which instantly destroys gradients!
+    arg = 1.0 - (wavelength_m*FX)**2 - (wavelength_m*FY)**2
+    
+    # Clamp arg to >= 0 to keep gradients healthy, then mask evanescent frequencies to 0
+    transfer_func = torch.exp(1.0j * k * z_dist_m * torch.sqrt(torch.clamp(arg, min=0.0)))
+    transfer_func[arg < 0] = 0.0
+
+    output_field = torch.fft.ifft2(torch.fft.ifftshift(wavefront_ft*transfer_func))
+
+    return output_field
+
+
+    
 # this function is responsible for the fraunhofer propagation of the wavefront from the sample plane to the detector plane.
 def fraunhofer_propagate(
     wavefront,
-    z_dist,
-    grid_spacing_object,
-    wavelength,
+    z_dist_m,
+    grid_spacing_object_m,
+    wavelength_m,
 ):
     """Propagate a wavefront using the Fraunhofer (far-field) diffraction. 
 
@@ -84,27 +113,27 @@ def fraunhofer_propagate(
     
     ny, nx = wavefront.shape
     device = wavefront.device
-    k = 2 * torch.pi / wavelength
+    k = 2 * torch.pi / wavelength_m
 
     # Get the spatial frequencies mapped by the FFT
-    fx = torch.fft.fftshift(torch.fft.fftfreq(nx, d=grid_spacing_object, device=device))
-    fy = torch.fft.fftshift(torch.fft.fftfreq(ny, d=grid_spacing_object, device=device))
+    fx = torch.fft.fftshift(torch.fft.fftfreq(nx, d=grid_spacing_object_m, device=device))
+    fy = torch.fft.fftshift(torch.fft.fftfreq(ny, d=grid_spacing_object_m, device=device))
 
     # Map spatial frequencies to physical coordinates at the detector plane
-    x_detector = fx * wavelength * z_dist
-    y_detector = fy * wavelength * z_dist
+    x_detector = fx * wavelength_m * z_dist_m
+    y_detector = fy * wavelength_m * z_dist_m
     X_det, Y_det = torch.meshgrid(x_detector, y_detector, indexing="xy")
 
     # FFT
     wavefront_ft = torch.fft.fftshift(
         torch.fft.fft2(torch.fft.ifftshift(wavefront))
-    ) * (grid_spacing_object**2)
+    ) * (grid_spacing_object_m**2)
 
     # The quadratic phase term must use the detector coordinates
-    quadratic_phase = torch.exp(1j * k * (X_det**2 + Y_det**2) / (2 * z_dist)) / (
-        1j * wavelength * z_dist
+    quadratic_phase = torch.exp(1j * k * (X_det**2 + Y_det**2) / (2 * z_dist_m)) / (
+        1j * wavelength_m * z_dist_m
     )
-    phase_factor = torch.exp(torch.tensor(1j * k * z_dist, device=device))
+    phase_factor = torch.exp(torch.tensor(1j * k * z_dist_m, device=device))
 
     detector_wave = wavefront_ft * quadratic_phase * phase_factor
 

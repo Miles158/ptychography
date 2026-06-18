@@ -5,8 +5,8 @@
 # 3. Visualizes the predicted intensity patterns to verify that the model is simulating the expected physics (e.g., diffraction patterns from the aperture). 
 import torch
 import matplotlib.pyplot as plt
-from src import models as models
-
+import models as models
+import numpy as np
 wavelength = 500e-9
 object_type = 'circular_aperture'
 object_extent = 25e-3 
@@ -39,7 +39,7 @@ plt.title('Object Amplitude')
 plt.colorbar(label='Amplitude')
 plt.savefig('object_amplitude.png')
 
-z_dist = 250e-3
+z_dist = 100e-3
 
 # simulate the forward pass of the ptychography model
 
@@ -50,6 +50,7 @@ model = models.PtychoModel(
     wavelength=500e-9, 
     z_dist=z_dist,
     detector_size=1.5e-2,  
+    detector_pixels=4096
 ) 
 
 
@@ -82,35 +83,35 @@ plt.savefig('predicted_intensity.png')
 
 
 # ####################################################################################################################################
-# from scipy.special import j1
+from scipy.special import j1
 
-# # circular aperture geometry
-# diameter = 2 * radius          # diameter
+# circular aperture geometry
+diameter = 2 * radius          # diameter
 
-# # --- detector coordinate axis consistent with your FFT mapping ---
-# fx = torch.fft.fftshift(torch.fft.fftfreq(grid_size, d=grid_spacing))  # spatial freq [cycles/m]
-# x_detector = (fx * wavelength * z_dist).cpu().numpy()                      # detector x-coordinates [m]
+# --- detector coordinate axis consistent with your FFT mapping ---
+fx = torch.fft.fftshift(torch.fft.fftfreq(grid_size, d=grid_spacing))  # spatial freq [cycles/m]
+x_detector = (fx * wavelength * z_dist).cpu().numpy()                      # detector x-coordinates [m]
 
-# # --- theoretical Airy pattern (normalized) ---
-# slice = np.abs(x_detector)  
-# u = np.pi * diameter * slice / (wavelength * z_dist)
+# --- theoretical Airy pattern (normalized) ---
+slice = np.abs(x_detector)  
+u = np.pi * diameter * slice / (wavelength * z_dist)
 
-# airy = np.ones_like(u, dtype=np.float64)
-# mask = u != 0
-# airy[mask] = (2 * j1(u[mask]) / u[mask])**2
+airy = np.ones_like(u, dtype=np.float64)
+mask = u != 0
+airy[mask] = (2 * j1(u[mask]) / u[mask])**2
 
-# # --- compare to your simulation center line ---
-# sim = predicted_intensity.detach().cpu().numpy()
-# center_line = sim[grid_size // 2, :]
+# --- compare to your simulation center line ---
+sim = predicted_intensity.detach().cpu().numpy()
+center_line = sim[grid_size // 2, :]
 
-# center_line_n = center_line / center_line.max()
-# airy_n = airy / airy.max()
+center_line_n = center_line / center_line.max()
+airy_n = airy / airy.max()
 
-# plt.figure()
-# plt.plot(x_detector * 1e3, center_line_n, label="Sim (center row)")
-# plt.plot(x_detector * 1e3, airy_n, '--', label="Theory Airy")
-# plt.xlabel("x_det (mm)")
-# plt.ylabel("Normalized intensity")
-# plt.legend()
-# plt.savefig("airy_compare.png")
+plt.figure()
+plt.plot(x_detector * 1e3, center_line_n, label="Sim (center row)")
+plt.plot(x_detector * 1e3, airy_n, '--', label="Theory Airy")
+plt.xlabel("x_det (mm)")
+plt.ylabel("Normalized intensity")
+plt.legend()
+plt.savefig("airy_compare.png")
 # ####################################################################################################################################

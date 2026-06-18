@@ -45,6 +45,7 @@ class PtychoModel(nn.Module):
         self.grid_spacing_detector = (
             wavelength * z_dist / (grid_size_object * grid_spacing_object)
         )  # from Fourier optics scaling
+        self.grid_size_detector = self.grid_size_object
 
         # The object is what we want to reconstruct. We represent it as learnable parameters.
         # Seperate amplitude and phase to avoid rectangular representation of complex numbers which can be harder to optimize.
@@ -99,12 +100,12 @@ class PtychoModel(nn.Module):
         # 3. interaction with the object
         exit_wavefront = illumination * shifted_object
 
-        # 4. Propagate to detector. Assuming far-field propagation.
-        detector_wave = prop.fraunhofer_propagate(
+        # 4. Propagate to detector. Assuming near-field propagation.
+        detector_wave = prop.huygens_propagate(
             wavefront=exit_wavefront,
-            z_dist=self.z_dist,
-            grid_spacing_object=self.grid_spacing_object,
-            wavelength=self.wavelength,
+            z_dist_m=self.z_dist,
+            grid_spacing_object_m=self.grid_spacing_object,
+            wavelength_m=self.wavelength,
         )
         if (self.grid_spacing_detector * detector_wave.size(0)) < (self.detector_size):
             print(
@@ -153,9 +154,7 @@ class DiptychModel(nn.Module):
         self.detector_pixels = detector_pixels
         self.device = device
 
-        self.grid_spacing_detector = (
-            wavelength * z_dist / (grid_size_object * grid_spacing_object)
-        )  # from Fourier optics scaling
+        self.grid_spacing_detector = self.grid_spacing_object  # Angular spectrum preserves grid spacing
 
         # The object is what we want to reconstruct. We represent it as learnable parameters.
         # Seperate amplitude and phase to avoid rectangular representation of complex numbers which can be harder to optimize.
@@ -208,12 +207,12 @@ class DiptychModel(nn.Module):
         # 3. interaction with the object
         exit_wavefront = reflected_illumination * complex_object
 
-        # 4. Propagate to detector. Assuming far-field propagation.
-        detector_wave = prop.fraunhofer_propagate(
+        # 4. Propagate to detector. Assuming near-field propagation.
+        detector_wave = prop.huygens_propagate(
             wavefront=exit_wavefront,
-            z_dist=self.z_dist,
-            grid_spacing_object=self.grid_spacing_object,
-            wavelength=self.wavelength,
+            z_dist_m=self.z_dist,
+            grid_spacing_object_m=self.grid_spacing_object,
+            wavelength_m=self.wavelength,
         )
         if (self.grid_spacing_detector * detector_wave.size(0)) < (self.detector_size):
             print(
@@ -249,9 +248,7 @@ class STXM(nn.Module):
         self.detector_size = detector_size
         self.device = device
 
-        self.grid_spacing_detector = (
-            wavelength * z_dist / (grid_size_object * grid_spacing_object)
-        )  # from Fourier optics scaling
+        self.grid_spacing_detector = self.grid_spacing_object  # Angular spectrum preserves grid spacing
 
         # The object is what we want to reconstruct. We represent it as learnable parameters.
         # I find rectangular representation of complex numbers can be harder to optimize, so we seperate amplitude and phase.
@@ -303,12 +300,12 @@ class STXM(nn.Module):
         # 3. interaction with the object
         exit_wavefront = illumination * shifted_object
 
-        # 4. Propagate to detector. Assuming far-field propagation.
-        detector_wave = prop.fraunhofer_propagate(
+        # 4. Propagate to detector. Assuming near-field propagation.
+        detector_wave = prop.huygens_propagate(
             wavefront=exit_wavefront,
-            z_dist=self.z_dist,
-            grid_spacing_object=self.grid_spacing_object,
-            wavelength=self.wavelength,
+            z_dist_m=self.z_dist,
+            grid_spacing_object_m=self.grid_spacing_object,
+            wavelength_m=self.wavelength,
         )
 
         if (self.grid_spacing_detector * detector_wave.size(0)) < (self.detector_size):

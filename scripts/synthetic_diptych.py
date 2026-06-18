@@ -16,28 +16,28 @@ device = "mps"
 
 # General Parameters
 wavelength = 500e-9
-z_dist = 250e-3 #
-grid_size = 1024
+z_dist = 0.2 #
+grid_size = 2048
 object_extent = 32e-3 #
 object_fraction = 0.75 # the object takes up a smaller part of the entire object. 
 grid_spacing = object_extent / grid_size
 probe_radius = 15e-3 
 
-source_intensity = 1000 # Units?? 
+total_incident_photons = 10000000 # Set the total number of photons in the entire beam
 
 # Detector Parameters
-detector_size = 1.5e-3 # 
+detector_size = 32e-3 # 
 detector_pixels = 1024
 
 # Mirror Parameters
 mirror_radius = probe_radius
-actuator_max_stroke = 500e-9
+actuator_max_stroke = 125e-9
 actuator_jitter = 0.0 # careful with this, its in the normalized actuator commands [-1,1]
 num_actuators = 48
 
 # Optimization
-num_measurements = 50
-num_epochs = 100
+num_measurements = 16
+num_epochs = 60
 
 
 # Setup coordinate grid
@@ -62,6 +62,9 @@ probe_distance = torch.sqrt(X**2 + Y**2)
 phi0 = 0.0
 probe_amplitude_mask = (probe_distance <= probe_radius).to(torch.float32)
 
+# Normalize the probe so the total sum of intensities (squared amplitude) equals our photon budget
+probe_intensity_sum = torch.sum(probe_amplitude_mask**2)
+probe_amplitude_mask = probe_amplitude_mask * torch.sqrt(total_incident_photons / probe_intensity_sum)
 
 # Set up the deformable mirror
 mirror = ao.deformableMirror(
@@ -109,26 +112,21 @@ with torch.no_grad():
         detector_intensity = gt_model(illumination, dm_commands_error, mirror)
         raw_intensities.append(detector_intensity)
 
-# Find global max across all measurements
 raw_intensities = torch.stack(raw_intensities)
-global_max_intensity = raw_intensities.max()
-
-# Scale all intensities such that the maximum pixel across all measurements matches source_intensity
-scale_factor = source_intensity / global_max_intensity
 
 measurements = []
 with torch.no_grad():
     for raw_int in raw_intensities:
-        scaled_intensity = raw_int * scale_factor
         # Add Poisson shot noise naturally on the photon counts
-        noisy_photons = helpers.add_shot_noise(scaled_intensity)
+        noisy_photons = helpers.add_shot_noise(raw_int)
         measurements.append(noisy_photons)
         
 measurements = torch.stack(measurements)
 dm_commands = torch.stack(dm_commands)
 
-print(f"Global max before scaling: {global_max_intensity:.4e}")
-print(f"Scaling factor (alpha): {scale_factor:.4e}")
+global_max_intensity = raw_intensities.max()
+print(f"Total incident photons in beam: {total_incident_photons:.4e}")
+print(f"Max detector pixel intensity (photons): {global_max_intensity:.4e}")
 print("Measurements generated. Starting optimization...")
 
 # --- 2. Initialize the Reconstruction Model ---
@@ -163,10 +161,7 @@ for epoch in range(num_epochs):
         illumination = probe_amplitude_mask.to(torch.complex64)
         
         # Forward pass using the DM commands (the model natively handles the mirror and propagation)
-        predicted_intensity_raw = model(illumination, dm_commands[idx], mirror)
-        
-        # Scale the predicted intensity by the exact same alpha factor so it matches the photon count domain
-        predicted_intensity = predicted_intensity_raw * scale_factor
+        predicted_intensity = model(illumination, dm_commands[idx], mirror)
         
         # Calculate loss against the measurement (using amplitude instead of raw photon intensity)
         # This stabilizes optimization when dealing with very large integer photon counts.
@@ -243,7 +238,7 @@ with torch.no_grad():
     for i in range(5):
         # 1. Recreate the probe
         mirror_phase = mirror.forward(dm_commands[i])
-        probe = (probe_amplitude_mask.to(torch.complex64) * mirror_phase) * source_intensity
+        probe = probe_amplitude_mask.to(torch.complex64)
         
         # When amplitude is exactly 0, phase is mathematically not very well defined but torch.angle
         # might return numerical noise or 0. We force it to 0 for a cleaner plot.
