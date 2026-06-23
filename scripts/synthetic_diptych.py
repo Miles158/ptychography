@@ -17,13 +17,13 @@ device = "mps"
 # General Parameters
 wavelength = 500e-9
 z_dist = 0.2 #
-grid_size = 2048
+grid_size = 1024
 object_extent = 32e-3 #
 object_fraction = 0.75 # the object takes up a smaller part of the entire object. 
 grid_spacing = object_extent / grid_size
 probe_radius = 15e-3 
 
-total_incident_photons = 10000000 # Set the total number of photons in the entire beam
+total_incident_photons = 10000000000 # Set the total number of photons in the entire beam
 
 # Detector Parameters
 detector_size = 32e-3 # 
@@ -37,7 +37,7 @@ num_actuators = 48
 
 # Optimization
 num_measurements = 16
-num_epochs = 60
+num_epochs = 30
 
 
 # Setup coordinate grid

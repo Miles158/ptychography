@@ -138,7 +138,7 @@ torch.save({
     "grid_spacing_m": grid_spacing,
     "detector_size_m": detector_size,
     "detector_pixels": detector_pixels,
-    "mirror_radius_m,": mirror_radius,
+    "mirror_radius_m": mirror_radius,
     "actuator_max_stroke_m": actuator_max_stroke,
     "num_actuators": num_actuators
 }, save_path)

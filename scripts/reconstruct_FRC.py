@@ -19,6 +19,9 @@ def reconstruct_dataset(data_path, num_epochs=100):
     dm_commands = dataset["dm_commands"].to(device)
     gt_object = dataset["gt_object"].to(device)
     probe_amplitude_mask = dataset["probe_amplitude_mask"].to(device)
+    scale_factor = dataset["scale_factor"]
+    if isinstance(scale_factor, torch.Tensor):
+        scale_factor = scale_factor.to(device)
 
     wavelength = dataset["wavelength_m"]
     z_dist = dataset["z_dist_m"]
@@ -69,7 +72,8 @@ def reconstruct_dataset(data_path, num_epochs=100):
         for idx in range(num_measurements):
             optimizer.zero_grad()
             illumination = probe_amplitude_mask.to(torch.complex64)
-            predicted_intensity = model(illumination, dm_commands[idx], mirror)
+            predicted_intensity_raw = model(illumination, dm_commands[idx], mirror)
+            predicted_intensity = predicted_intensity_raw * scale_factor
             
             loss = criterion(torch.sqrt(predicted_intensity + 1e-12), torch.sqrt(measurements[idx] + 1e-12))
             epoch_loss += loss.item()

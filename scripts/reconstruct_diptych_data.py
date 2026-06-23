@@ -15,7 +15,7 @@ device = "mps"
 
 
 # --- 1. Load the generated dataset ---
-data_path = os.path.join(os.path.dirname(__file__), '../data/synthetic/diptych_dataset_001.pt')
+data_path = os.path.join(os.path.dirname(__file__), '../data/synthetic/diptych_001_int:1000_photos:30.pt')
 print(f"Loading dataset from {data_path}...")
 dataset = torch.load(data_path, weights_only=False)
 
@@ -37,7 +37,8 @@ grid_spacing = dataset["grid_spacing_m"]
 detector_size = dataset["detector_size_m"]
 detector_pixels = dataset["detector_pixels"]
 
-mirror_radius = dataset["mirror_radius_m"]
+# Handle the typo in older dataset generations if present
+mirror_radius = dataset.get("mirror_radius_m", dataset.get("mirror_radius_m,"))
 actuator_max_stroke = dataset["actuator_max_stroke_m"]
 num_actuators = dataset["num_actuators"]
 
