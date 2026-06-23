@@ -6,40 +6,7 @@ Pytorch functions for optical propagation used in imaging simulations.
 """
 import torch.nn.functional as functional
 import torch
-
-# illuminate
-# creates a propagating wavefront from a designated source
-# --to be propagates to the sample plane.
-
-
-# this function is responsible for describing the illumination of the wavefront at the source plane.
-def source_illumination(grid_size, grid_spacing):
-
-    x = torch.linspace(
-        -grid_spacing * grid_size / 2, grid_spacing * grid_size / 2, grid_size
-    )
-    y = torch.linspace(
-        -grid_spacing * grid_size / 2, grid_spacing * grid_size / 2, grid_size
-    )
-    X, Y = torch.meshgrid(x, y, indexing="xy")
-
-    wavefront = torch.ones_like(
-        X, dtype=torch.complex64
-    )  # uniform plane wavefront. Should be changed.
-
-    return wavefront, X, Y
-
-
-def propagate_light(wavefront, z_dist, wavelength):
-    k = 2 * torch.pi / wavelength
-    # just a phase term; no diffraction considered.
-    return wavefront * torch.exp(1j * k * z_dist)
-
-
-# this function is responsible for describing the mask that the wavefront will pass through before the sample plane.
-def mask(wavefront, X, Y, mask_radius, x_cen, y_cen):
-    mask = ((X - x_cen) ** 2 + (Y - y_cen) ** 2 <= mask_radius**2).to(torch.complex64)
-    return wavefront * mask
+import numpy as np
 
 
 # this function is responsible for the fresnel propagation of the wavefront from the mask to the sample plane.
@@ -71,7 +38,7 @@ def huygens_propagate(
 ):
     ny, nx = wavefront.shape
     device = wavefront.device
-    k = 2 * torch.pi / wavelength_m
+    k = 2 * np.pi / wavelength_m
 
 
     wavefront_ft = torch.fft.fftshift(torch.fft.fft2(wavefront))
@@ -96,16 +63,16 @@ def huygens_propagate(
 # this function is responsible for the fraunhofer propagation of the wavefront from the sample plane to the detector plane.
 def fraunhofer_propagate(
     wavefront,
-    z_dist_m,
-    grid_spacing_object_m,
-    wavelength_m,
+    z_dist,
+    grid_spacing_object,
+    wavelength,
 ):
     """Propagate a wavefront using the Fraunhofer (far-field) diffraction. 
 
     Args: 
-        wavefront (torch.Tensor): Complex-valued square wavefront to be propagated.
+        wavefront (torch.Tensor): Complex-valued wavefront to be propagated.
         z_dist (float): propagation distance from object to sample. 
-        grid_spacing_object (float): Spacing (in meters) between points in the wavefront tensor. 
+        grid_spacing_object (float or tuple): Spacing (in meters) between points in the wavefront tensor. 
 
     Returns: 
         torch.Tensor: Complex valued propagated wavefront. 
@@ -113,27 +80,33 @@ def fraunhofer_propagate(
     
     ny, nx = wavefront.shape
     device = wavefront.device
-    k = 2 * torch.pi / wavelength_m
+    wavelength = torch.tensor(wavelength, dtype=torch.float32, device=device)  # or 'cpu'
+    k = 2 * torch.pi / wavelength
+
+
+
+    
+    dy, dx = grid_spacing_object
 
     # Get the spatial frequencies mapped by the FFT
-    fx = torch.fft.fftshift(torch.fft.fftfreq(nx, d=grid_spacing_object_m, device=device))
-    fy = torch.fft.fftshift(torch.fft.fftfreq(ny, d=grid_spacing_object_m, device=device))
+    fx = torch.fft.fftshift(torch.fft.fftfreq(nx, d=dx, device=device))
+    fy = torch.fft.fftshift(torch.fft.fftfreq(ny, d=dy, device=device))
 
     # Map spatial frequencies to physical coordinates at the detector plane
-    x_detector = fx * wavelength_m * z_dist_m
-    y_detector = fy * wavelength_m * z_dist_m
+    x_detector = fx * wavelength * z_dist
+    y_detector = fy * wavelength * z_dist
     X_det, Y_det = torch.meshgrid(x_detector, y_detector, indexing="xy")
 
     # FFT
     wavefront_ft = torch.fft.fftshift(
         torch.fft.fft2(torch.fft.ifftshift(wavefront))
-    ) * (grid_spacing_object_m**2)
+    ) * (dx * dy)
 
     # The quadratic phase term must use the detector coordinates
-    quadratic_phase = torch.exp(1j * k * (X_det**2 + Y_det**2) / (2 * z_dist_m)) / (
-        1j * wavelength_m * z_dist_m
+    quadratic_phase = torch.exp(1j * k * (X_det**2 + Y_det**2) / (2 * z_dist)) / (
+        1j * wavelength * z_dist
     )
-    phase_factor = torch.exp(torch.tensor(1j * k * z_dist_m, device=device))
+    phase_factor = torch.exp(torch.tensor(1j * k * z_dist, device=device))
 
     detector_wave = wavefront_ft * quadratic_phase * phase_factor
 
@@ -142,10 +115,13 @@ def fraunhofer_propagate(
 
 
 def crop_wavefront(wavefront, grid_spacing_detector, detector_size):
-    n = int(detector_size / grid_spacing_detector)  # number of pixels to capture.
-    sh = (wavefront.shape[-2] - n) // 2  # number of pixels to chop off the top / bottom
-    sw = (wavefront.shape[-1] - n) // 2  # number of pixels to chop off the left / right
-    return wavefront[..., sh : sh + n, sw : sw + n]
+
+    n_h = int(detector_size[0] / grid_spacing_detector[0])
+    n_w = int(detector_size[1] / grid_spacing_detector[1])
+    
+    sh = (wavefront.shape[-2] - n_h) // 2
+    sw = (wavefront.shape[-1] - n_w) // 2
+    return wavefront[..., sh : sh + n_h, sw : sw + n_w]
 
 
 def capture_diffraction(wavefront, grid_spacing_detector, detector_size):
@@ -182,10 +158,10 @@ def capture_diffraction_downsample(
     cropped = crop_wavefront(wavefront, grid_spacing_detector, detector_size)
     intensity = torch.abs(cropped) ** 2
 
-    intensity_downsampled = functional.interpolate(intensity.unsqueeze(0).unsqueeze(1).cpu(), size=(detector_pixels, detector_pixels), mode="area")
+    intensity_downsampled = functional.interpolate(intensity.unsqueeze(0).unsqueeze(1).cpu(), size=detector_pixels, mode="area")
     
     # Scale by the bin area to convert from average to sum (binning)
-    bin_area = (intensity.shape[-2] / detector_pixels) * (intensity.shape[-1] / detector_pixels)
+    bin_area = (intensity.shape[-2] / detector_pixels[0]) * (intensity.shape[-1] / detector_pixels[1])
     intensity_downsampled = intensity_downsampled * bin_area
 
     return intensity_downsampled.squeeze().squeeze().to(intensity.device)

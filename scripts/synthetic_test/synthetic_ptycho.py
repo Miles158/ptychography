@@ -23,7 +23,7 @@ probe_radius = 0.25e-3
 desired_overlap = 0.72
 
 source_intensity = 10000 
-num_epochs = 35
+num_epochs = 12
 
 # Detector Parameters
 detector_size = 1.5e-3 # 
@@ -80,13 +80,14 @@ print(f"Generating synthetic data for {len(shifts)} scan positions with overlap 
 
 # We use the true physics to generate our "experimental" data
 gt_model = models.PtychoModel(
-    grid_size_object=grid_size, 
-    grid_spacing_object=grid_spacing, 
+    object_grid_shape=(grid_size, grid_size), 
+    grid_spacing_object=(grid_spacing, grid_spacing), 
     wavelength=wavelength, 
-    z_dist=z_dist,
+    z_dist_init=0.2,
     device=device,
-    detector_size=detector_size,
-    detector_pixels=detector_pixels
+    detector_shape_m=(detector_size, detector_size),
+    detector_shape_px=(detector_pixels, detector_pixels),
+    probe_init=probe
 ).to(device)
 gt_model.set_object(gt_object)
 
@@ -95,7 +96,7 @@ gt_model.set_object(gt_object)
 measurements = []
 with torch.no_grad():
     for shift_x, shift_y in shifts:
-        intensity = gt_model(probe, pixel_shift_x=shift_x, pixel_shift_y=shift_y)
+        intensity = gt_model(pixel_shift_x=shift_x, pixel_shift_y=shift_y)
         noisy_intensity = helpers.add_shot_noise(intensity)
         measurements.append(noisy_intensity)
 measurements = torch.stack(measurements)
@@ -104,13 +105,14 @@ print("Measurements generated. Starting optimization...")
 
 # --- 2. Initialize the Reconstruction Model ---
 recon_model = models.PtychoModel(
-    grid_size_object=grid_size, 
-    grid_spacing_object=grid_spacing, 
+    object_grid_shape=(grid_size, grid_size), 
+    grid_spacing_object=(grid_spacing, grid_spacing), 
     wavelength=wavelength, 
-    z_dist=z_dist,
+    z_dist_init=0.2,
     device=device,
-    detector_size=detector_size,
-    detector_pixels=detector_pixels
+    detector_shape_m=(detector_size, detector_size),
+    detector_shape_px=(detector_pixels, detector_pixels),
+    probe_init=probe
 ).to(device)
 
 
@@ -132,7 +134,7 @@ for epoch in range(num_epochs):
         optimizer.zero_grad()
         
         # Forward pass
-        predicted_intensity = recon_model(probe, pixel_shift_x=shift_x, pixel_shift_y=shift_y)
+        predicted_intensity = recon_model(pixel_shift_x=shift_x, pixel_shift_y=shift_y)
         
         # Calculate loss against the measurement (using amplitude and stabilization)
         loss = criterion(torch.sqrt(predicted_intensity + 1e-12), torch.sqrt(measurements[idx] + 1e-12))

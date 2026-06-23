@@ -11,83 +11,65 @@ import propagation as prop
 import adaptive_optics as AO
 
 
+
+
 class PtychoModel(nn.Module):
-    """This model simulates a scanning ptychography setup with a learnable object.
-    
-    The model stores an objects ampltude and phase as learnable parameters and 
-    implements a forward model that 
-    1) applies a shift to the object plane
-    2) multiplies the object plane by a given illumination
-    3) propagates the resulting wave to a detector plane
-    4) returns the diffraction pattern on the detector plane.
+    """This model simulates a scanning ptychography setup with a learnable object,
+    learnable z_dist, and a learnable probe.
     """
 
     def __init__(
         self,
-        grid_size_object,
+        object_grid_shape,
         grid_spacing_object,
         wavelength,
-        z_dist,
-        detector_size,
-        detector_pixels,
+        z_dist_init,
+        probe_init,
+        detector_shape_m,
+        detector_shape_px,
         device="cpu",
     ):
-        """Create the ptychography model."""
+        """Create the learnable ptychography model."""
         super().__init__()
-        self.grid_size_object = grid_size_object
+        self.object_grid_shape = object_grid_shape
         self.grid_spacing_object = grid_spacing_object
         self.wavelength = wavelength
-        self.z_dist = z_dist
-        self.detector_size = detector_size
-        self.detector_pixels = detector_pixels
+        self.detector_shape_m = detector_shape_m
+        self.detector_shape_px = detector_shape_px
         self.device = device
 
-        self.grid_spacing_detector = (
-            wavelength * z_dist / (grid_size_object * grid_spacing_object)
-        )  # from Fourier optics scaling
-        # self.grid_size_detector = self.grid_size_object
+        # Learnable parameters
+        self.z_dist = nn.Parameter(torch.tensor(z_dist_init, dtype=torch.float32, device=device))
+        
+        # Probe as learnable complex parameter (amplitude and phase)
+        self.probe_amplitude = nn.Parameter(torch.abs(probe_init))
+        self.probe_phase = nn.Parameter(torch.angle(probe_init))
 
-        # The object is what we want to reconstruct. We represent it as learnable parameters.
-        # Seperate amplitude and phase to avoid rectangular representation of complex numbers which can be harder to optimize.
         self.object_phase = nn.Parameter(
             torch.zeros(
-                (grid_size_object, grid_size_object), dtype=torch.float32, device=device
+                (object_grid_shape[0], object_grid_shape[1]), dtype=torch.float32, device=device
             )
         )
-
         self.object_amplitude = nn.Parameter(
             torch.ones(
-                (grid_size_object, grid_size_object), dtype=torch.float32, device=device
+               (object_grid_shape[0], object_grid_shape[1]), dtype=torch.float32, device=device
             )
         )
 
     def set_object(self, object):
-        """Set the model's object with a complex tensor. 
+         """Set the model's object with a complex tensor. 
 
-            Args:
-                object (torch.Tensor): Complex valued tensor of shape 
-                (grid_size_object, grid_size_object).
-        """
-        self.object_amplitude.data = torch.abs(object)
-        self.object_phase.data = torch.angle(object)
+             Args:
+                 object (torch.Tensor): Complex valued tensor of shape 
+                 (object_grid_shape[0], object_grid_shape[1]).
+         """
+         self.object_amplitude.data = torch.abs(object)
+         self.object_phase.data = torch.angle(object)
 
-    def forward(self, illumination, pixel_shift_x=0, pixel_shift_y=0):
-        """Computes the diffraction pattern of the object with a given illumination & shift.
-
-            Args: 
-                illumination (torch.Tensor): Complex valued illumination field incident on 
-                    object plane. E.g. guassian beam, some constant amplitude/phase wavefront.
-                pixel_shift_x (int): Horizontal scanning stage shift.
-                pixel_shift_y (int): Vertical scanning stage shift. 
-
-            Returns: 
-                torch.Tensor: Real-valued detector intensity / diffraction pattern at the detector plane.
-        """
-
-        # 1. Construct the complex object
-        # Convert phase and amplitude to a complex tensor
+    def forward(self, pixel_shift_x=0, pixel_shift_y=0):
+        # 1. Construct complex object and probe
         complex_object = self.object_amplitude * torch.exp(1j * self.object_phase)
-        complex_object = complex_object.to(torch.complex64)
+        probe = self.probe_amplitude * torch.exp(1j * self.probe_phase)
 
         # 2. Simulate the scan shift
         if pixel_shift_x != 0 or pixel_shift_y != 0:
@@ -98,29 +80,140 @@ class PtychoModel(nn.Module):
             shifted_object = complex_object
 
         # 3. interaction with the object
-        exit_wavefront = illumination * shifted_object
+        exit_wavefront = probe * shifted_object
 
-        # 4. Propagate to detector. Assuming near-field propagation.
+        # 4. Propagate to detector using learnable z_dist
         detector_wave = prop.fraunhofer_propagate(
             wavefront=exit_wavefront,
-            z_dist_m=self.z_dist,
-            grid_spacing_object_m=self.grid_spacing_object,
-            wavelength_m=self.wavelength,
+            z_dist=self.z_dist,
+            grid_spacing_object=self.grid_spacing_object,
+            wavelength=self.wavelength,
         )
-        if (self.grid_spacing_detector * detector_wave.size(0)) < (self.detector_size):
-            print(
-                f"Warning: the calculated diffraction pattern {self.grid_spacing_detector * detector_wave.size(0)} is smaller than the specified detector size."
-            )
 
-        # 5. Capture the expected intensity at the detector
+        # 5. Capture the expected intensity
+        grid_spacing_detector = (
+            self.wavelength * self.z_dist / (self.object_grid_shape[0] * self.grid_spacing_object[0]),
+            self.wavelength * self.z_dist / (self.object_grid_shape[1] * self.grid_spacing_object[1])
+        )
+        
         predicted_intensity = prop.capture_diffraction_downsample(
             wavefront=detector_wave,
-            grid_spacing_detector=self.grid_spacing_detector,
-            detector_size=self.detector_size,
-            detector_pixels= self.detector_pixels
+            grid_spacing_detector=grid_spacing_detector,
+            detector_size=self.detector_shape_m,
+            detector_pixels=self.detector_shape_px
         )
 
         return predicted_intensity
+
+
+
+
+# class PtychoModel(nn.Module):
+#     """This model simulates a scanning ptychography setup with a learnable object.
+    
+#     The model stores an objects ampltude and phase as learnable parameters and 
+#     implements a forward model that 
+#     1) applies a shift to the object plane
+#     2) multiplies the object plane by a given illumination
+#     3) propagates the resulting wave to a detector plane
+#     4) returns the diffraction pattern on the detector plane.
+#     """
+
+#     def __init__(
+#         self,
+#         object_grid_shape,
+#         grid_spacing_object,
+#         wavelength,
+#         z_dist,
+#         detector_shape_m,
+#         detector_shape_px,
+#         device="cpu",
+#     ):
+#         """Create the ptychography model."""
+#         super().__init__()
+#         self.object_grid_shape = object_grid_shape
+#         self.grid_spacing_object = grid_spacing_object
+#         self.wavelength = wavelength
+#         self.z_dist = z_dist
+#         self.detector_shape_m = detector_shape_m
+#         self.detector_shape_px = detector_shape_px
+#         self.device = device
+
+#         # The object is what we want to reconstruct. We represent it as learnable parameters.
+#         # Seperate amplitude and phase to avoid rectangular representation of complex numbers which can be harder to optimize.
+#         self.object_phase = nn.Parameter(
+#             torch.zeros(
+#                 object_grid_shape, dtype=torch.float32, device=device
+#             )
+#         )
+
+#         self.object_amplitude = nn.Parameter(
+#             torch.ones(
+#                 object_grid_shape, dtype=torch.float32, device=device
+#             )
+#         )
+
+#     def set_object(self, object):
+#         """Set the model's object with a complex tensor. 
+
+#             Args:
+#                 object (torch.Tensor): Complex valued tensor of shape 
+#                 (object_grid_shape[0], object_grid_shape[1]).
+#         """
+#         self.object_amplitude.data = torch.abs(object)
+#         self.object_phase.data = torch.angle(object)
+
+#     def forward(self, illumination, pixel_shift_x=0, pixel_shift_y=0):
+#         """Computes the diffraction pattern of the object with a given illumination & shift.
+
+#             Args: 
+#                 illumination (torch.Tensor): Complex valued illumination field incident on 
+#                     object plane. E.g. guassian beam, some constant amplitude/phase wavefront.
+#                 pixel_shift_x (int): Horizontal scanning stage shift.
+#                 pixel_shift_y (int): Vertical scanning stage shift. 
+
+#             Returns: 
+#                 torch.Tensor: Real-valued detector intensity / diffraction pattern at the detector plane.
+#         """
+
+#         # 1. Construct the complex object
+#         # Convert phase and amplitude to a complex tensor
+#         complex_object = self.object_amplitude * torch.exp(1j * self.object_phase)
+#         complex_object = complex_object.to(torch.complex64)
+
+#         # 2. Simulate the scan shift
+#         if pixel_shift_x != 0 or pixel_shift_y != 0:
+#             shifted_object = torch.roll(
+#                 complex_object, shifts=(pixel_shift_y, pixel_shift_x), dims=(0, 1)
+#             )
+#         else:
+#             shifted_object = complex_object
+
+#         # 3. interaction with the object
+#         exit_wavefront = illumination * shifted_object
+
+#         # 4. Propagate to detector. Assuming near-field propagation.
+#         detector_wave = prop.fraunhofer_propagate(
+#             wavefront=exit_wavefront,
+#             z_dist=self.z_dist,
+#             grid_spacing_object=self.grid_spacing_object,
+#             wavelength=self.wavelength,
+#         )
+        
+#         grid_spacing_detector = (
+#             self.wavelength * self.z_dist / (self.object_grid_shape[0] * self.grid_spacing_object[0]),
+#             self.wavelength * self.z_dist / (self.object_grid_shape[1] * self.grid_spacing_object[1])
+#         )
+
+#         # 5. Capture the expected intensity at the detector
+#         predicted_intensity = prop.capture_diffraction_downsample(
+#             wavefront=detector_wave,
+#             grid_spacing_detector=grid_spacing_detector,
+#             detector_size=self.detector_shape_m,
+#             detector_pixels= self.detector_shape_px
+#         )
+
+#         return predicted_intensity
 
 
 class DiptychModel(nn.Module):
@@ -136,40 +229,35 @@ class DiptychModel(nn.Module):
 
     def __init__(
         self,
-        grid_size_object,
+        object_grid_shape,
         grid_spacing_object,
         wavelength,
         z_dist,
-        detector_size=None,
-        detector_pixels=None,
+        detector_shape_m=None,
+        detector_shape_px=None,
         device="cpu",
     ):
         """Create the ptychography model."""
         super().__init__()
-        self.grid_size_object = grid_size_object
+        self.object_grid_shape = object_grid_shape
         self.grid_spacing_object = grid_spacing_object
         self.wavelength = wavelength
         self.z_dist = z_dist
-        self.detector_size = detector_size
-        self.detector_pixels = detector_pixels
+        self.detector_shape_m = detector_shape_m
+        self.detector_shape_px = detector_shape_px
         self.device = device
-
-        self.grid_spacing_detector = (
-            wavelength * z_dist / (grid_size_object * grid_spacing_object)
-        )  # from Fourier optics scaling
-        # self.grid_size_detector = self.grid_size_object
 
         # The object is what we want to reconstruct. We represent it as learnable parameters.
         # Seperate amplitude and phase to avoid rectangular representation of complex numbers which can be harder to optimize.
         self.object_phase = nn.Parameter(
             torch.zeros(
-                (grid_size_object, grid_size_object), dtype=torch.float32, device=device
+                object_grid_shape, dtype=torch.float32, device=device
             )
         )
 
         self.object_amplitude = nn.Parameter(
             torch.ones(
-                (grid_size_object, grid_size_object), dtype=torch.float32, device=device
+                object_grid_shape, dtype=torch.float32, device=device
             )
         )
 
@@ -178,7 +266,7 @@ class DiptychModel(nn.Module):
 
             Args:
                 object (torch.Tensor): Complex valued tensor of shape 
-                (grid_size_object, grid_size_object).
+                (object_grid_shape[0], object_grid_shape[1]).
         """
         self.object_amplitude.data = torch.abs(object)
         self.object_phase.data = torch.angle(object)
@@ -213,117 +301,105 @@ class DiptychModel(nn.Module):
         # 4. Propagate to detector. Assuming near-field propagation.
         detector_wave = prop.fraunhofer_propagate(
             wavefront=exit_wavefront,
-            z_dist_m=self.z_dist,
-            grid_spacing_object_m=self.grid_spacing_object,
-            wavelength_m=self.wavelength,
+            z_dist=self.z_dist,
+            grid_spacing_object=self.grid_spacing_object,
+            wavelength=self.wavelength,
         )
-        if (self.grid_spacing_detector * detector_wave.size(0)) < (self.detector_size):
-            print(
-                f"Warning: the calculated diffraction pattern {self.grid_spacing_detector * detector_wave.size(0)} is smaller than the specified detector size."
-            )
+        
+        grid_spacing_detector = (
+            self.wavelength * self.z_dist / (self.object_grid_shape[0] * self.grid_spacing_object),
+            self.wavelength * self.z_dist / (self.object_grid_shape[1] * self.grid_spacing_object)
+        )
 
         predicted_intensity = prop.capture_diffraction_downsample(
             wavefront=detector_wave,
-            grid_spacing_detector=self.grid_spacing_detector,
-            detector_size=self.detector_size,
-            detector_pixels=self.detector_pixels
+            grid_spacing_detector=grid_spacing_detector,
+            detector_size=self.detector_shape_m,
+            detector_pixels=self.detector_shape_px
         )
 
 
         return predicted_intensity
 
 
-class STXM(nn.Module):
+class LearnablePtychoModel(nn.Module):
+    """This model simulates a scanning ptychography setup with a learnable object,
+    learnable z_dist, and a learnable probe.
+    """
+
     def __init__(
         self,
-        grid_size_object,
+        object_grid_shape,
         grid_spacing_object,
         wavelength,
-        z_dist,
-        detector_size=None,
+        z_dist_init,
+        probe_init,
+        detector_shape_m,
+        detector_shape_px,
         device="cpu",
     ):
+        """Create the learnable ptychography model."""
         super().__init__()
-        self.grid_size_object = grid_size_object
+        self.object_grid_shape = object_grid_shape
         self.grid_spacing_object = grid_spacing_object
         self.wavelength = wavelength
-        self.z_dist = z_dist
-        self.detector_size = detector_size
+        self.detector_shape_m = detector_shape_m
+        self.detector_shape_px = detector_shape_px
         self.device = device
 
-        self.grid_spacing_detector = (
-            wavelength * z_dist / (grid_size_object * grid_spacing_object)
-        )  # from Fourier optics scaling
-        # self.grid_size_detector = self.grid_size_object
+        # Learnable parameters
+        self.z_dist = nn.Parameter(torch.tensor(z_dist_init, dtype=torch.float32, device=device))
+        
+        # Probe as learnable complex parameter (amplitude and phase)
+        self.probe_amplitude = nn.Parameter(torch.abs(probe_init))
+        self.probe_phase = nn.Parameter(torch.angle(probe_init))
 
-        # The object is what we want to reconstruct. We represent it as learnable parameters.
-        # I find rectangular representation of complex numbers can be harder to optimize, so we seperate amplitude and phase.
         self.object_phase = nn.Parameter(
             torch.zeros(
-                (self.grid_size_object, self.grid_size_object),
-                dtype=torch.float32,
-                device=device,
+                object_grid_shape, dtype=torch.float32, device=device
             )
         )
         self.object_amplitude = nn.Parameter(
             torch.ones(
-                (self.grid_size_object, self.grid_size_object),
-                dtype=torch.float32,
-                device=device,
+                object_grid_shape, dtype=torch.float32, device=device
             )
         )
 
-    def set_object(self, object):
-        # Zero-pad the object if it is smaller than the model's grid size
-        h, w = object.shape
-        pad_h = max(0, (self.grid_size_object - h) // 2)
-        pad_w = max(0, (self.grid_size_object - w) // 2)
-        if pad_h > 0 or pad_w > 0:
-            object = torch.nn.functional.pad(
-                object, (pad_w, pad_w, pad_h, pad_h), mode="constant", value=0.0
-            )
-
-        self.object_amplitude.data = torch.abs(object)
-        self.object_phase.data = torch.angle(object)
-
-    def forward(self, illumination, pixel_shift_x=0, pixel_shift_y=0):
-        """
-        Forward pass simulates the physics of the STXM setup.
-        """
-        # 1. Construct the complex object
-        complex_object = (self.object_amplitude * torch.exp(1j * self.object_phase)).to(
-            torch.complex64
-        )
+    def forward(self, pixel_shift_x=0, pixel_shift_y=0):
+        # 1. Construct complex object and probe
+        complex_object = self.object_amplitude * torch.exp(1j * self.object_phase)
+        probe = self.probe_amplitude * torch.exp(1j * self.probe_phase)
 
         # 2. Simulate the scan shift
         if pixel_shift_x != 0 or pixel_shift_y != 0:
             shifted_object = torch.roll(
-                complex_object, shifts=(-pixel_shift_y, -pixel_shift_x), dims=(0, 1)
+                complex_object, shifts=(pixel_shift_y, pixel_shift_x), dims=(0, 1)
             )
         else:
             shifted_object = complex_object
 
         # 3. interaction with the object
-        exit_wavefront = illumination * shifted_object
+        exit_wavefront = probe * shifted_object
 
-        # 4. Propagate to detector. Assuming near-field propagation.
+        # 4. Propagate to detector using learnable z_dist
         detector_wave = prop.fraunhofer_propagate(
             wavefront=exit_wavefront,
-            z_dist_m=self.z_dist,
-            grid_spacing_object_m=self.grid_spacing_object,
-            wavelength_m=self.wavelength,
+            z_dist=self.z_dist,
+            grid_spacing_object=self.grid_spacing_object,
+            wavelength=self.wavelength,
         )
 
-        if (self.grid_spacing_detector * detector_wave.size(0)) < (self.detector_size):
-            print(
-                f"Warning: the calculated diffraction pattern {self.grid_spacing_detector * detector_wave.size(0)} is smaller than the specified detector size."
-            )
-
-        # 5. Capture the expected intensity at the detector
-        predicted_intensity = prop.capture_intensity(
+        # 5. Capture the expected intensity
+        grid_spacing_detector = (
+            self.wavelength * self.z_dist / (self.object_grid_shape[0] * self.grid_spacing_object),
+            self.wavelength * self.z_dist / (self.object_grid_shape[1] * self.grid_spacing_object)
+        )
+        
+        predicted_intensity = prop.capture_diffraction_downsample(
             wavefront=detector_wave,
-            grid_spacing_detector=self.grid_spacing_detector,
-            detector_size=self.detector_size,
+            grid_spacing_detector=grid_spacing_detector,
+            detector_size=self.detector_shape_m,
+            detector_pixels=self.detector_shape_px
         )
 
         return predicted_intensity
