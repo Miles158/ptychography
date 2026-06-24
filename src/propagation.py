@@ -38,12 +38,13 @@ def huygens_propagate(
 ):
     ny, nx = wavefront.shape
     device = wavefront.device
-    k = 2 * np.pi / wavelength_m
+    wavelength = torch.tensor(wavelength_m, dtype=torch.float32, device=device)  # or 'cpu'
+    k = 2 * torch.pi / wavelength
 
 
     wavefront_ft = torch.fft.fftshift(torch.fft.fft2(wavefront))
-    fx = torch.fft.fftshift(torch.fft.fftfreq(nx, d=grid_spacing_object_m, device=device))
-    fy = torch.fft.fftshift(torch.fft.fftfreq(ny, d=grid_spacing_object_m, device=device))
+    fx = torch.fft.fftshift(torch.fft.fftfreq(nx, d=grid_spacing_object_m[0], device=device))
+    fy = torch.fft.fftshift(torch.fft.fftfreq(ny, d=grid_spacing_object_m[1], device=device))
     FX, FY = torch.meshgrid(fx, fy, indexing="xy")
 
     # 1. Prevent NaNs: Evanescent waves create negative values inside the sqrt.
@@ -51,8 +52,13 @@ def huygens_propagate(
     arg = 1.0 - (wavelength_m*FX)**2 - (wavelength_m*FY)**2
     
     # Clamp arg to >= 0 to keep gradients healthy, then mask evanescent frequencies to 0
-    transfer_func = torch.exp(1.0j * k * z_dist_m * torch.sqrt(torch.clamp(arg, min=0.0)))
-    transfer_func[arg < 0] = 0.0
+    sqrt_arg = torch.sqrt(torch.clamp(arg, min=0.0).to(torch.float32))
+    phase = 1.0j * k * z_dist_m * sqrt_arg
+    transfer_func = torch.exp(phase)
+    
+    # Apply mask out-of-place by multiplying
+    valid_mask = (arg >= 0).to(transfer_func.dtype)
+    transfer_func = transfer_func * valid_mask
 
     output_field = torch.fft.ifft2(torch.fft.ifftshift(wavefront_ft*transfer_func))
 

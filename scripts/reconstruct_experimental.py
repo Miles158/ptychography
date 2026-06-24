@@ -13,7 +13,7 @@ import models as models
 device = "mps"
 
 wavelength = 632e-9
-z_dist_start = 10e-3
+z_dist_start = 6e-3
 grid_size = 2048
 object_extent = 8e-3
 grid_spacing = object_extent / grid_size
@@ -60,7 +60,7 @@ with open(data_path, 'rb') as f:
     data = pickle.load(f)
 
 # Subsample immediately in numpy to keep memory footprint low
-subsample_rate = 5
+subsample_rate = 6
 diffraction_patterns_np = np.array(data['diffraction_patterns'])[::subsample_rate, :, :, 0]
 x_positions_np = np.array(data['x_positions'])[::subsample_rate]
 y_positions_np = np.array(data['y_positions'])[::subsample_rate]
