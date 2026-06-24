@@ -36,7 +36,7 @@ with open(data_path, 'rb') as f:
     data = pickle.load(f)
 
 # Subsample immediately in numpy to keep memory footprint low
-subsample_rate = 1
+subsample_rate = 3
 diffraction_patterns_np = np.array(data['diffraction_patterns'])[::subsample_rate, :, :]
 x_positions_np = np.array(data['x_positions'])[::subsample_rate]
 y_positions_np = np.array(data['y_positions'])[::subsample_rate]
@@ -53,25 +53,14 @@ y_positions_m = y_positions_m - torch.mean(y_positions_m)
 loaded_probe = torch.from_numpy(loaded_probe_np.astype(np.float32)).to(device) 
 
 breakpoint()
-# Load the probe from the data
-# The probe is on the detector plane, we need to map it to the object plane.
-# Assuming the planes are the same size/spacing for the starting point.
-raw_probe = torch.from_numpy(loaded_probe_np.astype(np.complex64)).to(device)
-
-# Resize the probe to match the object grid shape using zero-padding
-h_raw, w_raw = raw_probe.shape
-h_obj, w_obj = detector_shape_m
-
-pad_h = (h_obj - h_raw) // 2
-pad_w = (w_obj - w_raw) // 2
-
-# Pad
-initial_probe = torch.nn.functional.pad(
-    raw_probe, 
-    (int(pad_w), int(w_obj - w_raw - pad_w), int(pad_h), int(h_obj - h_raw - pad_h)), 
-    mode='constant', 
-    value=0.0
-)
+# Create a Gaussian starter probe
+x = torch.linspace(-object_extent/2, object_extent/2, grid_size, device=device)
+y = torch.linspace(-object_extent/2, object_extent/2, grid_size, device=device)
+X, Y = torch.meshgrid(y, x, indexing='xy')
+fwhm = 0.75e-3 # Set your desired FWHM in meters
+sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
+initial_probe = torch.exp(-(X**2 + Y**2) / (2 * sigma**2)).to(torch.complex64)
+initial_probe = initial_probe * torch.sqrt(torch.tensor(source_intensity, device=device))
 
 
 spacing = data['metadata']['spacing']
@@ -104,7 +93,7 @@ criterion = nn.MSELoss()
 loss_history = []
 
 # --- 3. Optimization Loop ---
-num_epochs = 5
+num_epochs = 1
 print("Starting ptychographic reconstruction...")
 
 for epoch in range(num_epochs):
