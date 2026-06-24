@@ -45,34 +45,34 @@ loaded_probe_np = np.array(data['beam_profile_data']['averaged_profile'])
 diffraction_patterns = torch.from_numpy(diffraction_patterns_np.astype(np.float32)).to(device)
 x_positions_m = torch.from_numpy(x_positions_np.astype(np.float32)).to(device) / 34555 / 1000
 y_positions_m = torch.from_numpy(y_positions_np.astype(np.float32)).to(device) / 34555 / 1000
+
+# Zero the positions to center the scan pattern
+x_positions_m = x_positions_m - torch.mean(x_positions_m)
+y_positions_m = y_positions_m - torch.mean(y_positions_m)
+
 loaded_probe = torch.from_numpy(loaded_probe_np.astype(np.float32)).to(device) 
 
-
+breakpoint()
 # Load the probe from the data
 # The probe is on the detector plane, we need to map it to the object plane.
 # Assuming the planes are the same size/spacing for the starting point.
 raw_probe = torch.from_numpy(loaded_probe_np.astype(np.complex64)).to(device)
 
-# Interpolate intensity (abs^2) to avoid complex interpolation issues
-probe_intensity = torch.abs(raw_probe).unsqueeze(0).unsqueeze(0)
-probe_phase = torch.angle(raw_probe).unsqueeze(0).unsqueeze(0)
+# Resize the probe to match the object grid shape using zero-padding
+h_raw, w_raw = raw_probe.shape
+h_obj, w_obj = detector_shape_m
 
-# Resize intensity and phase separately
-initial_probe_amp = torch.nn.functional.interpolate(
-    probe_intensity, 
-    size=(grid_size, grid_size), 
-    mode='bilinear', 
-    align_corners=False
-).squeeze()
+pad_h = (h_obj - h_raw) // 2
+pad_w = (w_obj - w_raw) // 2
 
-initial_probe_phase = torch.nn.functional.interpolate(
-    probe_phase, 
-    size=(grid_size, grid_size), 
-    mode='bilinear', 
-    align_corners=False
-).squeeze()
+# Pad
+initial_probe = torch.nn.functional.pad(
+    raw_probe, 
+    (int(pad_w), int(w_obj - w_raw - pad_w), int(pad_h), int(h_obj - h_raw - pad_h)), 
+    mode='constant', 
+    value=0.0
+)
 
-initial_probe = initial_probe_amp * torch.exp(1j * initial_probe_phase)
 
 spacing = data['metadata']['spacing']
 # Clean up large numpy arrays
