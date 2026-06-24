@@ -92,9 +92,9 @@ class PtychoModel(nn.Module):
 
         # 5. Capture the expected intensity
         grid_spacing_detector = (
-            self.wavelength * self.z_dist / (self.object_grid_shape[0] * self.grid_spacing_object[0]),
-            self.wavelength * self.z_dist / (self.object_grid_shape[1] * self.grid_spacing_object[1])
-        )
+            self.detector_shape_m[0] / self.dectector_shape_px[0],
+            self.detector_shape_m[1] / self.detector_shape_px[1]
+            )
         
         predicted_intensity = prop.capture_diffraction_downsample(
             wavefront=detector_wave,
