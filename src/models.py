@@ -83,11 +83,11 @@ class PtychoModel(nn.Module):
         exit_wavefront = probe * shifted_object
 
         # 4. Propagate to detector using learnable z_dist
-        detector_wave = prop.huygens_propagate(
+        detector_wave = prop.fresnel_propagate(
             wavefront=exit_wavefront,
-            z_dist_m=self.z_dist,
-            grid_spacing_object_m=self.grid_spacing_object,
-            wavelength_m=self.wavelength,
+            z_dist=self.z_dist,
+            grid_spacing=self.grid_spacing_object,
+            wavelength=self.wavelength,
         )
 
         # 5. Capture the expected intensity

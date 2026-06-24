@@ -14,25 +14,74 @@ device = "mps"
 
 wavelength = 632e-9
 z_dist_start = 6e-3
-grid_size = 2048
-object_extent = 8e-3
+grid_size = 2048 * 2
+object_extent = 14e-3
 grid_spacing = object_extent / grid_size
 
-probe_radius = 1e-3 
+probe_radius = 0.1e-3 
 source_intensity = 10000
 
-detector_shape_m = (2.38e-3, 4.22e-3)
-detector_shape_px = (1080, 1920)
+detector_shape_m = (2.38e-3, 2.38e-3)
+detector_shape_px = (1080, 1080)
 
-# Create a starter probe
-x = torch.linspace(-object_extent/2, object_extent/2, grid_size, device=device)
-y = torch.linspace(-object_extent/2, object_extent/2, grid_size, device=device)
-X, Y = torch.meshgrid(x, y, indexing='xy')
-r = torch.sqrt(X**2 + Y**2)  # uses your existing X, Y in meters
-phi0 = 0.0
-mask = (r <= probe_radius).to(torch.float32)  # top-hat aperture
 
-probe = mask.to(torch.complex64) * torch.sqrt(torch.tensor(source_intensity, device=device)) * torch.exp(torch.tensor(1j * phi0, device=device))
+
+
+
+# --- 1. Load Experimental Data ---
+data_path = os.path.join(os.path.dirname(__file__), '../data/experimental/stxm_06232036_002.pkl')
+print(f"Loading experimental data from {data_path}...")
+with open(data_path, 'rb') as f:
+    # Load data as numpy arrays first to avoid immediate memory explosion
+    data = pickle.load(f)
+
+# Subsample immediately in numpy to keep memory footprint low
+subsample_rate = 1
+diffraction_patterns_np = np.array(data['diffraction_patterns'])[::subsample_rate, :, :]
+x_positions_np = np.array(data['x_positions'])[::subsample_rate]
+y_positions_np = np.array(data['y_positions'])[::subsample_rate]
+loaded_probe_np = np.array(data['beam_profile_data']['averaged_profile'])
+# Convert only the subsampled data to torch tensors
+diffraction_patterns = torch.from_numpy(diffraction_patterns_np.astype(np.float32)).to(device)
+x_positions_m = torch.from_numpy(x_positions_np.astype(np.float32)).to(device) / 34555 / 1000
+y_positions_m = torch.from_numpy(y_positions_np.astype(np.float32)).to(device) / 34555 / 1000
+loaded_probe = torch.from_numpy(loaded_probe_np.astype(np.float32)).to(device) 
+
+
+# Load the probe from the data
+# The probe is on the detector plane, we need to map it to the object plane.
+# Assuming the planes are the same size/spacing for the starting point.
+raw_probe = torch.from_numpy(loaded_probe_np.astype(np.complex64)).to(device)
+
+# Interpolate intensity (abs^2) to avoid complex interpolation issues
+probe_intensity = torch.abs(raw_probe).unsqueeze(0).unsqueeze(0)
+probe_phase = torch.angle(raw_probe).unsqueeze(0).unsqueeze(0)
+
+# Resize intensity and phase separately
+initial_probe_amp = torch.nn.functional.interpolate(
+    probe_intensity, 
+    size=(grid_size, grid_size), 
+    mode='bilinear', 
+    align_corners=False
+).squeeze()
+
+initial_probe_phase = torch.nn.functional.interpolate(
+    probe_phase, 
+    size=(grid_size, grid_size), 
+    mode='bilinear', 
+    align_corners=False
+).squeeze()
+
+initial_probe = initial_probe_amp * torch.exp(1j * initial_probe_phase)
+
+spacing = data['metadata']['spacing']
+# Clean up large numpy arrays
+del data, diffraction_patterns_np, x_positions_np, y_positions_np
+import gc
+gc.collect()
+
+
+
 
 
 
@@ -44,48 +93,18 @@ model = models.PtychoModel(
     device=device,
     detector_shape_m=detector_shape_m,
     detector_shape_px=detector_shape_px,
-    probe_init=probe
+    probe_init=initial_probe
 ).to(device)
 
 
 
-# Ensure imports work
 
-
-# --- 1. Load Experimental Data ---
-data_path = os.path.join(os.path.dirname(__file__), '../data/experimental/stxm_06232036_001.pkl')
-print(f"Loading experimental data from {data_path}...")
-with open(data_path, 'rb') as f:
-    # Load data as numpy arrays first to avoid immediate memory explosion
-    data = pickle.load(f)
-
-# Subsample immediately in numpy to keep memory footprint low
-subsample_rate = 6
-diffraction_patterns_np = np.array(data['diffraction_patterns'])[::subsample_rate, :, :, 0]
-x_positions_np = np.array(data['x_positions'])[::subsample_rate]
-y_positions_np = np.array(data['y_positions'])[::subsample_rate]
-
-# Convert only the subsampled data to torch tensors
-diffraction_patterns = torch.from_numpy(diffraction_patterns_np.astype(np.float32)).to(device)
-x_positions_m = torch.from_numpy(x_positions_np.astype(np.float32)).to(device) / 34555 / 1000
-y_positions_m = torch.from_numpy(y_positions_np.astype(np.float32)).to(device) / 34555 / 1000
-
-
-metadata = data['metadata']
-spacing = metadata['spacing']
-# Clean up large numpy arrays
-del data, diffraction_patterns_np, x_positions_np, y_positions_np
-import gc
-gc.collect()
-
-
-
-optimizer = optim.AdamW(model.parameters(), lr=0.01)
+optimizer = optim.AdamW(model.parameters(), lr=0.001)
 criterion = nn.MSELoss()
 loss_history = []
 
 # --- 3. Optimization Loop ---
-num_epochs = 12
+num_epochs = 5
 print("Starting ptychographic reconstruction...")
 
 for epoch in range(num_epochs):
@@ -115,6 +134,57 @@ for epoch in range(num_epochs):
 print(f"Optimization complete. Optimized z_dist: {model.z_dist.item():.4e} m")
 
 # --- 4. Visualization ---
+# Visualization of Diffraction Patterns
+os.makedirs('plots', exist_ok=True)
+fig, axes = plt.subplots(4, 4, figsize=(12, 12))
+for i in range(min(16, len(diffraction_patterns))):
+    ax = axes.flat[i]
+    # Take log for better visualization
+    pattern = torch.log10(diffraction_patterns[i] + 1e-6).cpu().numpy()
+    ax.imshow(pattern, cmap='inferno')
+    ax.set_title(f"x: {x_positions_m[i]*1000:.2f}mm, y: {y_positions_m[i]*1000:.2f}mm", fontsize=8)
+    ax.axis('off')
+plt.tight_layout()
+plt.savefig('plots/diffraction_patterns.png')
+print("Saved diffraction patterns to plots/diffraction_patterns.png")
+plt.close(fig)
+
+# --- 5. Comparison Visualization ---
+model.eval()
+with torch.no_grad():
+    indices = [0, len(diffraction_patterns)//2, len(diffraction_patterns)-1]
+    fig, axes = plt.subplots(4, 4, figsize=(15, 15))
+    
+    # Row 1: Optimized Object/Probe
+    axes[0, 0].imshow(model.object_amplitude.detach().cpu().numpy(), cmap='gray')
+    axes[0, 0].set_title('Obj Amp')
+    axes[0, 1].imshow(model.object_phase.detach().cpu().numpy(), cmap='twilight')
+    axes[0, 1].set_title('Obj Phase')
+    axes[0, 2].imshow(model.probe_amplitude.detach().cpu().numpy(), cmap='inferno')
+    axes[0, 2].set_title('Probe Amp')
+    axes[0, 3].imshow(model.probe_phase.detach().cpu().numpy(), cmap='twilight')
+    axes[0, 3].set_title('Probe Phase')
+    
+    # Rows 2-4: Comparison
+    for row, idx in enumerate(indices, 1):
+        shift_x = int(x_positions_m[idx] / spacing)
+        shift_y = int(y_positions_m[idx] / spacing)
+        pred = model(pixel_shift_x=shift_x, pixel_shift_y=shift_y).detach().cpu().numpy()
+        meas = diffraction_patterns[idx].detach().cpu().numpy()
+        
+        axes[row, 0].imshow(np.log10(meas + 1e-6), cmap='inferno')
+        axes[row, 0].set_title(f'Meas {idx}')
+        axes[row, 1].imshow(np.log10(pred + 1e-6), cmap='inferno')
+        axes[row, 1].set_title(f'Pred {idx}')
+        axes[row, 2].imshow(meas - pred, cmap='bwr')
+        axes[row, 2].set_title('Diff')
+        axes[row, 3].axis('off')
+        
+    plt.tight_layout()
+    plt.savefig('plots/reconstruction_comparison.png')
+    print("Saved reconstruction comparison to plots/reconstruction_comparison.png")
+    plt.close(fig)
+
 plt.figure(figsize=(20, 5))
 plt.subplot(1, 4, 1)
 plt.plot(loss_history)

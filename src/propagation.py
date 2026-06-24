@@ -8,29 +8,40 @@ import torch.nn.functional as functional
 import torch
 import numpy as np
 
+import torch
 
-# this function is responsible for the fresnel propagation of the wavefront from the mask to the sample plane.
 def fresnel_propagate(wavefront, z_dist, grid_spacing, wavelength):
-    nx, ny = wavefront.shape
+    # wavefront: complex tensor (e.g., complex64)
     device = wavefront.device
+    dtype = torch.float32
 
-    # form the spatial frequency bins for the FFT
-    Fx = torch.fft.fftfreq(nx, d=grid_spacing, device=device)
-    Fy = torch.fft.fftfreq(ny, d=grid_spacing, device=device)
-    Vx, Vy = torch.meshgrid(Fy, Fx, indexing="xy")
+    dx = torch.tensor(grid_spacing[0], dtype=dtype, device=device)
+    dy = torch.tensor(grid_spacing[1], dtype=dtype, device=device)
+    wl = torch.tensor(wavelength, dtype=dtype, device=device)
 
-    k = 2 * torch.pi / wavelength
+    ny, nx = wavefront.shape
+
+    Fx = torch.fft.fftfreq(nx, d=dx, device=device)  # float32
+    Fy = torch.fft.fftfreq(ny, d=dy, device=device)  # float32
+
+    Vx = Fx.unsqueeze(0).expand(ny, nx)
+    Vy = Fy.unsqueeze(1).expand(ny, nx)
+
+    k = 2 * torch.pi / wl  # float32
 
     wavefront_ft = torch.fft.fft2(wavefront)
-    transfer_func = torch.exp(torch.tensor(1j * k * z_dist, device=device)) * torch.exp(
-        -1j * torch.pi * wavelength * z_dist * (Vx**2 + Vy**2)
+
+    phase_factor = torch.exp((1j * k * z_dist).to(torch.complex64))
+    quad_phase = torch.exp(
+        (-1j * torch.pi * wl * z_dist * (Vx**2 + Vy**2)).to(torch.complex64)
     )
-    # Fresnel approximation for near-field propagation
+
+    transfer_func = phase_factor * quad_phase
     wavefront_transferred = wavefront_ft * transfer_func
 
     return torch.fft.ifft2(wavefront_transferred)
 
-def huygens_propagate(
+def ASM_propagate(
         wavefront, 
         z_dist_m,
         grid_spacing_object_m,
@@ -47,15 +58,11 @@ def huygens_propagate(
     fy = torch.fft.fftshift(torch.fft.fftfreq(ny, d=grid_spacing_object_m[1], device=device))
     FX, FY = torch.meshgrid(fx, fy, indexing="xy")
 
-    # 1. Prevent NaNs: Evanescent waves create negative values inside the sqrt.
-    # torch.sqrt on negative real numbers yields NaN, which instantly destroys gradients!
-    arg = 1.0 - (wavelength_m*FX)**2 - (wavelength_m*FY)**2
-    
-    # Clamp arg to >= 0 to keep gradients healthy, then mask evanescent frequencies to 0
-    sqrt_arg = torch.sqrt(torch.clamp(arg, min=0.0).to(torch.float32))
+    arg = 1.0 - (wavelength_m * FX)**2 - (wavelength_m * FY)**2
+    sqrt_arg = torch.sqrt(arg.to(torch.complex64))   # complex sqrt, no clamping
     phase = 1.0j * k * z_dist_m * sqrt_arg
     transfer_func = torch.exp(phase)
-    
+
     # Apply mask out-of-place by multiplying
     valid_mask = (arg >= 0).to(transfer_func.dtype)
     transfer_func = transfer_func * valid_mask
