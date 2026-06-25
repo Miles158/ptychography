@@ -88,12 +88,22 @@ model = models.PtychoModel(
 
 
 optimizer = optim.AdamW([
-    {'params': [model.object_amplitude, model.object_phase], 'lr': 0.01},
-    {'params': [model.probe_amplitude, model.probe_phase], 'lr': 0.5},
+    {'params': [model.object_amplitude], 'lr': 0.01},
+    {'params': [model.object_phase], 'lr': 0.05},
+    {'params': [model.probe_amplitude], 'lr': 0.2},
+    {'params': [model.probe_phase], 'lr': 0.05},
     {'params': [model.z_dist], 'lr': 0.0005}
 ])
 criterion = nn.MSELoss()
 loss_history = []
+z_history = []
+probe_max_history = []
+# Snapshot settings: save probe/object every `snapshot_interval` epochs
+snapshot_interval = 5
+snapshot_epochs = []
+probe_snapshots = []
+obj_amp_snapshots = []
+obj_phase_snapshots = []
 
 # --- 3. Optimization Loop ---
 num_epochs = 25
@@ -127,6 +137,21 @@ for epoch in range(num_epochs):
     
     print(f"Epoch {epoch+1}/{num_epochs}, Loss: {epoch_loss/len(diffraction_patterns):.4e}")
     loss_history.append(epoch_loss/len(diffraction_patterns))
+    # record diagnostics per epoch
+    try:
+        z_history.append(float(model.z_dist.item()))
+    except Exception:
+        z_history.append(None)
+    try:
+        probe_max_history.append(float(model.probe_amplitude.detach().cpu().max().item()))
+    except Exception:
+        probe_max_history.append(None)
+    # record snapshots
+    if ((epoch + 1) % snapshot_interval == 0) or (epoch == num_epochs - 1):
+        snapshot_epochs.append(epoch + 1)
+        probe_snapshots.append(model.probe_amplitude.detach().cpu().numpy())
+        obj_amp_snapshots.append(model.object_amplitude.detach().cpu().numpy())
+        obj_phase_snapshots.append(model.object_phase.detach().cpu().numpy())
 
 print(f"Optimization complete. Optimized z_dist: {model.z_dist.item():.4e} m")
 # Save optimized results (z_dist, probe, object) for later analysis
@@ -151,6 +176,58 @@ out_path = os.path.join('data/experimental', f'{filename}.pkl')
 with open(out_path, 'wb') as f:
     pickle.dump(results, f)
 print(f"Saved reconstruction results to {out_path}")
+
+# --- Diagnostic plot: z_dist and max probe amplitude vs epoch
+try:
+    epochs = list(range(1, len(z_history) + 1))
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6), sharex=True)
+    ax1.plot(epochs, z_history, marker='o')
+    ax1.set_ylabel('z_dist (m)')
+    ax1.set_title('Optimized z_dist over epochs')
+    ax1.grid(True)
+
+    ax2.plot(epochs, probe_max_history, marker='o', color='tab:orange')
+    ax2.set_xlabel('Epoch')
+    ax2.set_ylabel('Max probe amplitude')
+    ax2.set_title('Max probe amplitude over epochs')
+    ax2.grid(True)
+
+    plt.tight_layout()
+    plt.savefig('plots/z_probe_history.png', dpi=300)
+    plt.close(fig)
+    print('Saved z_dist and probe history to plots/z_probe_history.png')
+except Exception:
+    pass
+
+    # --- Snapshot grid: probe amp / object amp / object phase across selected epochs
+    try:
+        if len(probe_snapshots) > 0:
+            extent = [-object_extent/2*1000, object_extent/2*1000, -object_extent/2*1000, object_extent/2*1000]
+            ncols = len(probe_snapshots)
+            fig, axes = plt.subplots(3, ncols, figsize=(4 * ncols, 12), constrained_layout=True)
+            for c in range(ncols):
+                ep = snapshot_epochs[c]
+                im_p = axes[0, c].imshow(probe_snapshots[c], cmap='inferno', extent=extent)
+                axes[0, c].set_title(f'Probe Amp (ep {ep})')
+                axes[0, c].axis('off')
+                fig.colorbar(im_p, ax=axes[0, c], fraction=0.046, pad=0.04)
+
+                im_o = axes[1, c].imshow(obj_amp_snapshots[c], cmap='gray', extent=extent)
+                axes[1, c].set_title(f'Obj Amp (ep {ep})')
+                axes[1, c].axis('off')
+                fig.colorbar(im_o, ax=axes[1, c], fraction=0.046, pad=0.04)
+
+                im_ph = axes[2, c].imshow(obj_phase_snapshots[c], cmap='twilight', extent=extent)
+                axes[2, c].set_title(f'Obj Phase (ep {ep})')
+                axes[2, c].axis('off')
+                fig.colorbar(im_ph, ax=axes[2, c], fraction=0.046, pad=0.04)
+
+            out_snap = os.path.join('plots', 'probe_object_snapshots.png')
+            fig.savefig(out_snap, dpi=300)
+            plt.close(fig)
+            print(f'Saved probe/object snapshot grid to {out_snap}')
+    except Exception:
+        pass
 
 # --- 4. Visualization ---
 # Visualization of Diffraction Patterns
