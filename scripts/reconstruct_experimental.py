@@ -14,9 +14,10 @@ device = "mps"
 
 wavelength = 632e-9
 z_dist_start = 6e-3
-grid_size = 2048 * 2
-object_extent = 8e-3
+grid_size = 1500
+object_extent = 5.5e-3
 grid_spacing = object_extent / grid_size
+print(grid_spacing)
 
 probe_radius = 0.1e-3 
 source_intensity = 100
@@ -36,7 +37,7 @@ with open(data_path, 'rb') as f:
     data = pickle.load(f)
 
 # Subsample immediately in numpy to keep memory footprint low
-subsample_rate = 3
+subsample_rate = 1
 diffraction_patterns_np = np.array(data['diffraction_patterns'])[::subsample_rate, :, :]
 x_positions_np = np.array(data['x_positions'])[::subsample_rate]
 y_positions_np = np.array(data['y_positions'])[::subsample_rate]
@@ -53,7 +54,6 @@ y_positions_m = - y_positions_m
 
 loaded_probe = torch.from_numpy(loaded_probe_np.astype(np.float32)).to(device) 
 
-breakpoint()
 # Create a Gaussian starter probe
 x = torch.linspace(-object_extent/2, object_extent/2, grid_size, device=device)
 y = torch.linspace(-object_extent/2, object_extent/2, grid_size, device=device)
@@ -89,12 +89,12 @@ model = models.PtychoModel(
 
 
 
-optimizer = optim.AdamW(model.parameters(), lr=0.001)
+optimizer = optim.AdamW(model.parameters(), lr=0.02)
 criterion = nn.MSELoss()
 loss_history = []
 
 # --- 3. Optimization Loop ---
-num_epochs = 15
+num_epochs = 25
 print("Starting ptychographic reconstruction...")
 
 for epoch in range(num_epochs):
@@ -117,6 +117,9 @@ for epoch in range(num_epochs):
         optimizer.step()
         
         epoch_loss += loss.item()
+
+        with torch.no_grad():
+            model.object_amplitude.data = torch.clamp(model.object_amplitude.data, 0, 1)
     
     print(f"Epoch {epoch+1}/{num_epochs}, Loss: {epoch_loss/len(diffraction_patterns):.4e}")
     loss_history.append(epoch_loss/len(diffraction_patterns))
@@ -190,21 +193,24 @@ plt.xlabel('Epoch')
 plt.ylabel('MSE Loss')
 plt.yscale('log')
 
-plt.subplot(1, 4, 2)
-plt.imshow(model.object_amplitude.detach().cpu().numpy(), cmap='gray', extent=extent)
+ax2 = plt.subplot(1, 4, 2)
+im2 = plt.imshow(model.object_amplitude.detach().cpu().numpy(), cmap='gray', extent=extent)
 plt.title('Reconstructed Amplitude (mm)')
 plt.xlabel('x (mm)')
 plt.ylabel('y (mm)')
+plt.colorbar(im2, ax=ax2, fraction=0.046, pad=0.04)
 
-plt.subplot(1, 4, 3)
-plt.imshow(model.object_phase.detach().cpu().numpy(), cmap='twilight', extent=extent)
+ax3 = plt.subplot(1, 4, 3)
+im3 = plt.imshow(model.object_phase.detach().cpu().numpy(), cmap='twilight', extent=extent)
 plt.title('Reconstructed Phase')
 plt.xlabel('x (mm)')
 plt.ylabel('y (mm)')
+plt.colorbar(im3, ax=ax3, fraction=0.046, pad=0.04)
 
-plt.subplot(1, 4, 4)
-plt.imshow(model.probe_amplitude.detach().cpu().numpy(), cmap='inferno')
+ax4 = plt.subplot(1, 4, 4)
+im4 = plt.imshow(model.probe_amplitude.detach().cpu().numpy(), cmap='inferno', extent=extent)
 plt.title('Optimized Probe Amplitude')
+plt.colorbar(im4, ax=ax4, fraction=0.046, pad=0.04)
 
 plt.tight_layout()
 plt.savefig('plots/experimental_reconstruction.png')
