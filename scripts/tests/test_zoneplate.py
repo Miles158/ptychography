@@ -48,8 +48,8 @@ gc.collect()
 
 # --- 2. Setup Simulation Parameters ---
 wavelength = 632e-9
-z_dist =  0.075# Placeholder, update with actual distance
-grid_size = 2048
+z_dist =  10e-3  # Placeholder, update with actual distance
+grid_size = 2048 * 8
 object_extent = 6e-3
 grid_spacing = object_extent / grid_size
 

@@ -14,8 +14,8 @@ device = "mps"
 
 wavelength = 632e-9
 z_dist_start = 6e-3
-grid_size = 1500
-object_extent = 5.5e-3
+grid_size = 2160
+object_extent = 6.0e-3
 grid_spacing = object_extent / grid_size
 print(grid_spacing)
 
@@ -26,26 +26,24 @@ detector_shape_m = (2.38e-3, 2.38e-3)
 detector_shape_px = (1080, 1080)
 
 
-
+filename = "stxm_06252036_001"
 
 
 # --- 1. Load Experimental Data ---
-data_path = os.path.join(os.path.dirname(__file__), '../data/experimental/stxm_06232036_002.pkl')
+data_path = os.path.join(os.path.dirname(__file__), f'../data/experimental/{filename}.pkl')
 print(f"Loading experimental data from {data_path}...")
 with open(data_path, 'rb') as f:
     # Load data as numpy arrays first to avoid immediate memory explosion
     data = pickle.load(f)
 
-# Subsample immediately in numpy to keep memory footprint low
-subsample_rate = 1
-diffraction_patterns_np = np.array(data['diffraction_patterns'])[::subsample_rate, :, :]
-x_positions_np = np.array(data['x_positions'])[::subsample_rate]
-y_positions_np = np.array(data['y_positions'])[::subsample_rate]
+diffraction_patterns_np = np.array(data['diffraction_patterns'])[:, :, :]
+x_positions_np = np.array(data['x_positions'])[:]
+y_positions_np = np.array(data['y_positions'])[:]
 loaded_probe_np = np.array(data['beam_profile_data']['averaged_profile'])
 # Convert only the subsampled data to torch tensors
 diffraction_patterns = torch.from_numpy(diffraction_patterns_np.astype(np.float32)).to(device)
-x_positions_m = torch.from_numpy(x_positions_np.astype(np.float32)).to(device) / 34555 / 1000
-y_positions_m = torch.from_numpy(y_positions_np.astype(np.float32)).to(device) / 34555 / 1000
+x_positions_m = torch.from_numpy(x_positions_np.astype(np.float32)).to(device) / 24332 / 1000
+y_positions_m = torch.from_numpy(y_positions_np.astype(np.float32)).to(device) / 24332 / 1000
 
 # Zero the positions to center the scan pattern
 x_positions_m = x_positions_m - torch.mean(x_positions_m)
@@ -89,7 +87,11 @@ model = models.PtychoModel(
 
 
 
-optimizer = optim.AdamW(model.parameters(), lr=0.02)
+optimizer = optim.AdamW([
+    {'params': [model.object_amplitude, model.object_phase], 'lr': 0.01},
+    {'params': [model.probe_amplitude, model.probe_phase], 'lr': 0.5},
+    {'params': [model.z_dist], 'lr': 0.0005}
+])
 criterion = nn.MSELoss()
 loss_history = []
 
@@ -120,11 +122,35 @@ for epoch in range(num_epochs):
 
         with torch.no_grad():
             model.object_amplitude.data = torch.clamp(model.object_amplitude.data, 0, 1)
+            model.probe_amplitude.data = torch.clamp(model.probe_amplitude.data, 0, max=None)
+            model.z_dist.data = torch.clamp(model.z_dist.data, 0, max=None)
     
     print(f"Epoch {epoch+1}/{num_epochs}, Loss: {epoch_loss/len(diffraction_patterns):.4e}")
     loss_history.append(epoch_loss/len(diffraction_patterns))
 
-# print(f"Optimization complete. Optimized z_dist: {model.z_dist.item():.4e} m")
+print(f"Optimization complete. Optimized z_dist: {model.z_dist.item():.4e} m")
+# Save optimized results (z_dist, probe, object) for later analysis
+os.makedirs('plots', exist_ok=True)
+results = {
+    'z_dist_m': float(model.z_dist.item()),
+    'grid_spacing_object_m': model.grid_spacing_object,
+}
+
+# build complex probe and object as numpy arrays on CPU
+probe_amp = model.probe_amplitude.detach().cpu().numpy()
+probe_phase = model.probe_phase.detach().cpu().numpy()
+probe_complex = probe_amp * np.exp(1j * probe_phase)
+results['probe'] = probe_complex.astype(np.complex64)
+
+obj_amp = model.object_amplitude.detach().cpu().numpy()
+obj_phase = model.object_phase.detach().cpu().numpy()
+obj_complex = obj_amp * np.exp(1j * obj_phase)
+results['object'] = obj_complex.astype(np.complex64)
+
+out_path = os.path.join('data/experimental', f'{filename}.pkl')
+with open(out_path, 'wb') as f:
+    pickle.dump(results, f)
+print(f"Saved reconstruction results to {out_path}")
 
 # --- 4. Visualization ---
 # Visualization of Diffraction Patterns

@@ -31,12 +31,13 @@ def fresnel_propagate(wavefront, z_dist, grid_spacing, wavelength):
 
     wavefront_ft = torch.fft.fft2(wavefront)
 
-    phase_factor = torch.exp((1j * k * z_dist).to(torch.complex64))
+    # phase_factor = torch.exp((1j * k * z_dist).to(torch.complex64))
     quad_phase = torch.exp(
         (-1j * torch.pi * wl * z_dist * (Vx**2 + Vy**2)).to(torch.complex64)
     )
 
-    transfer_func = phase_factor * quad_phase
+    # transfer_func = phase_factor * quad_phase
+    transfer_func = quad_phase
     wavefront_transferred = wavefront_ft * transfer_func
 
     return torch.fft.ifft2(wavefront_transferred)
