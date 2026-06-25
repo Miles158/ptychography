@@ -37,7 +37,6 @@ class PtychoModel(nn.Module):
         self.detector_shape_m = detector_shape_m
         self.detector_shape_px = detector_shape_px
         self.device = device
-
         # Learnable parameters
         self.z_dist = nn.Parameter(torch.tensor(z_dist_init, dtype=torch.float32, device=device))
         
@@ -71,13 +70,38 @@ class PtychoModel(nn.Module):
         complex_object = self.object_amplitude * torch.exp(1j * self.object_phase)
         probe = self.probe_amplitude * torch.exp(1j * self.probe_phase)
 
-        # 2. Simulate the scan shift
+        # 2. Simulate the scan shift (Non-periodic)
         if pixel_shift_x != 0 or pixel_shift_y != 0:
-            shifted_object = torch.roll(
-                complex_object, shifts=(pixel_shift_y, pixel_shift_x), dims=(0, 1)
-            )
+            # Pad the object to allow shifting without wrap-around
+            # Pad by the maximum possible shift amount
+            pad_x = abs(pixel_shift_x)
+            pad_y = abs(pixel_shift_y)
+            
+            # Pad with zeros
+            padded_object = torch.nn.functional.pad(
+                complex_object.unsqueeze(0).unsqueeze(0), 
+                (pad_x, pad_x, pad_y, pad_y), 
+                mode='constant', 
+                value=0.0
+            ).squeeze()
+            
+            # Shift the padded object
+            # Note: adjust indices based on padding
+            shifted_object = padded_object[
+                pad_y - pixel_shift_y : pad_y - pixel_shift_y + self.object_grid_shape[0],
+                pad_x - pixel_shift_x : pad_x - pixel_shift_x + self.object_grid_shape[1]
+            ]
         else:
             shifted_object = complex_object
+        # ... rest of the forward pass ...
+
+        # # 2. Simulate the scan shift
+        # if pixel_shift_x != 0 or pixel_shift_y != 0:
+        #     shifted_object = torch.roll(
+        #         complex_object, shifts=(pixel_shift_y, pixel_shift_x), dims=(0, 1)
+        #     )
+        # else:
+        #     shifted_object = complex_object
 
         # 3. interaction with the object
         exit_wavefront = probe * shifted_object
@@ -91,10 +115,9 @@ class PtychoModel(nn.Module):
         )
 
         # 5. Capture the expected intensity
-        grid_spacing_detector = (
-            self.detector_shape_m[0] / self.dectector_shape_px[0],
-            self.detector_shape_m[1] / self.detector_shape_px[1]
-            )
+        # In Fresnel (near-field) propagation, the grid spacing is preserved.
+        # The detector wave has the exact same physical pixel size as the object plane.
+        grid_spacing_detector = self.grid_spacing_object
         
         predicted_intensity = prop.capture_diffraction_downsample(
             wavefront=detector_wave,
@@ -321,85 +344,3 @@ class DiptychModel(nn.Module):
 
         return predicted_intensity
 
-
-class LearnablePtychoModel(nn.Module):
-    """This model simulates a scanning ptychography setup with a learnable object,
-    learnable z_dist, and a learnable probe.
-    """
-
-    def __init__(
-        self,
-        object_grid_shape,
-        grid_spacing_object,
-        wavelength,
-        z_dist_init,
-        probe_init,
-        detector_shape_m,
-        detector_shape_px,
-        device="cpu",
-    ):
-        """Create the learnable ptychography model."""
-        super().__init__()
-        self.object_grid_shape = object_grid_shape
-        self.grid_spacing_object = grid_spacing_object
-        self.wavelength = wavelength
-        self.detector_shape_m = detector_shape_m
-        self.detector_shape_px = detector_shape_px
-        self.device = device
-
-        # Learnable parameters
-        self.z_dist = nn.Parameter(torch.tensor(z_dist_init, dtype=torch.float32, device=device))
-        
-        # Probe as learnable complex parameter (amplitude and phase)
-        self.probe_amplitude = nn.Parameter(torch.abs(probe_init))
-        self.probe_phase = nn.Parameter(torch.angle(probe_init))
-
-        self.object_phase = nn.Parameter(
-            torch.zeros(
-                object_grid_shape, dtype=torch.float32, device=device
-            )
-        )
-        self.object_amplitude = nn.Parameter(
-            torch.ones(
-                object_grid_shape, dtype=torch.float32, device=device
-            )
-        )
-
-    def forward(self, pixel_shift_x=0, pixel_shift_y=0):
-        # 1. Construct complex object and probe
-        complex_object = self.object_amplitude * torch.exp(1j * self.object_phase)
-        probe = self.probe_amplitude * torch.exp(1j * self.probe_phase)
-
-        # 2. Simulate the scan shift
-        if pixel_shift_x != 0 or pixel_shift_y != 0:
-            shifted_object = torch.roll(
-                complex_object, shifts=(pixel_shift_y, pixel_shift_x), dims=(0, 1)
-            )
-        else:
-            shifted_object = complex_object
-
-        # 3. interaction with the object
-        exit_wavefront = probe * shifted_object
-
-        # 4. Propagate to detector using learnable z_dist
-        detector_wave = prop.fraunhofer_propagate(
-            wavefront=exit_wavefront,
-            z_dist=self.z_dist,
-            grid_spacing_object=self.grid_spacing_object,
-            wavelength=self.wavelength,
-        )
-
-        # 5. Capture the expected intensity
-        grid_spacing_detector = (
-            self.wavelength * self.z_dist / (self.object_grid_shape[0] * self.grid_spacing_object),
-            self.wavelength * self.z_dist / (self.object_grid_shape[1] * self.grid_spacing_object)
-        )
-        
-        predicted_intensity = prop.capture_diffraction_downsample(
-            wavefront=detector_wave,
-            grid_spacing_detector=grid_spacing_detector,
-            detector_size=self.detector_shape_m,
-            detector_pixels=self.detector_shape_px
-        )
-
-        return predicted_intensity

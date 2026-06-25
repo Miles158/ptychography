@@ -125,3 +125,53 @@ def make_siemens_star_mask(
 
     mask = mask.to(torch.float32)
     return mask.to(torch.complex64)
+
+
+import torch
+
+def make_zone_plate_mask(
+    grid_size,
+    pixel_size=1e-6,             # physical size of one pixel in meters (e.g., 1 um)
+    focal_length=0.01,           # focal length in meters (e.g., 1 cm)
+    wavelength=632e-9,           # default to 632 nm (HeNe laser)
+    margin=0.0,                  # keep pattern inside an outer circle
+    central_transparent=True,    # True = center is 1; False = center is 0
+    device="cpu"
+):
+    """
+    Creates a Fresnel zone plate binary mask (0/1) inside an outer circle.
+
+    Returns: complex64 tensor of shape (grid_size, grid_size).
+    """
+    # Coordinate grid centered at (0,0)
+    # Use pixel-center coordinates to keep it symmetric
+    coords = torch.arange(grid_size, device=device, dtype=torch.float32) - (grid_size - 1) / 2
+    
+    # Scale coordinates by pixel size to get physical dimensions
+    X, Y = torch.meshgrid(coords * pixel_size, coords * pixel_size, indexing='xy')
+    
+    r_sq = X**2 + Y**2
+    r = torch.sqrt(r_sq)
+
+    # Maximum physical radius based on margin
+    max_physical_radius = (grid_size / 2.0) * pixel_size
+    outer_radius = max_physical_radius * (1.0 - margin)
+
+    # Zone plate mathematical logic: 
+    # A zone switches phase when radius squared crosses multiples of (wavelength * focal_length)
+    zone_index = torch.floor(r_sq / (wavelength * focal_length)).to(torch.int64)
+
+    # Alternating zones: even indices are one state, odd are the other
+    if central_transparent:
+        mask = (zone_index % 2) == 0
+    else:
+        mask = (zone_index % 2) == 1
+
+    # Apply outer circle support (trim edges based on margin)
+    mask = mask & (r <= outer_radius)
+
+    # Match the orientation of your other masks
+    mask = torch.flip(mask, dims=[0])
+
+    mask = mask.to(torch.float32)
+    return mask.to(torch.complex64)

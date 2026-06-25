@@ -15,11 +15,11 @@ device = "mps"
 wavelength = 632e-9
 z_dist_start = 6e-3
 grid_size = 2048 * 2
-object_extent = 14e-3
+object_extent = 8e-3
 grid_spacing = object_extent / grid_size
 
 probe_radius = 0.1e-3 
-source_intensity = 10000
+source_intensity = 100
 
 detector_shape_m = (2.38e-3, 2.38e-3)
 detector_shape_px = (1080, 1080)
@@ -49,6 +49,7 @@ y_positions_m = torch.from_numpy(y_positions_np.astype(np.float32)).to(device) /
 # Zero the positions to center the scan pattern
 x_positions_m = x_positions_m - torch.mean(x_positions_m)
 y_positions_m = y_positions_m - torch.mean(y_positions_m)
+y_positions_m = - y_positions_m
 
 loaded_probe = torch.from_numpy(loaded_probe_np.astype(np.float32)).to(device) 
 
@@ -78,7 +79,7 @@ model = models.PtychoModel(
     object_grid_shape=(grid_size, grid_size), 
     grid_spacing_object=(grid_spacing, grid_spacing), 
     wavelength=wavelength, 
-    z_dist_init=0.2,
+    z_dist_init=0.053,
     device=device,
     detector_shape_m=detector_shape_m,
     detector_shape_px=detector_shape_px,
@@ -93,7 +94,7 @@ criterion = nn.MSELoss()
 loss_history = []
 
 # --- 3. Optimization Loop ---
-num_epochs = 1
+num_epochs = 15
 print("Starting ptychographic reconstruction...")
 
 for epoch in range(num_epochs):
@@ -102,8 +103,8 @@ for epoch in range(num_epochs):
         optimizer.zero_grad()
         
         # Convert meter positions to pixel shifts
-        shift_x = int(x_positions_m[i] / spacing)
-        shift_y = int(y_positions_m[i] / spacing)
+        shift_x = int(x_positions_m[i] / grid_spacing)
+        shift_y = int(y_positions_m[i] / grid_spacing)
         
         # Forward pass
         pred = model(pixel_shift_x=shift_x, pixel_shift_y=shift_y)
@@ -120,13 +121,13 @@ for epoch in range(num_epochs):
     print(f"Epoch {epoch+1}/{num_epochs}, Loss: {epoch_loss/len(diffraction_patterns):.4e}")
     loss_history.append(epoch_loss/len(diffraction_patterns))
 
-print(f"Optimization complete. Optimized z_dist: {model.z_dist.item():.4e} m")
+# print(f"Optimization complete. Optimized z_dist: {model.z_dist.item():.4e} m")
 
 # --- 4. Visualization ---
 # Visualization of Diffraction Patterns
 os.makedirs('plots', exist_ok=True)
-fig, axes = plt.subplots(4, 4, figsize=(12, 12))
-for i in range(min(16, len(diffraction_patterns))):
+fig, axes = plt.subplots(8, 8, figsize=(12, 12))
+for i in range(min(64, len(diffraction_patterns))):
     ax = axes.flat[i]
     # Take log for better visualization
     pattern = torch.log10(diffraction_patterns[i] + 1e-6).cpu().numpy()
@@ -134,7 +135,7 @@ for i in range(min(16, len(diffraction_patterns))):
     ax.set_title(f"x: {x_positions_m[i]*1000:.2f}mm, y: {y_positions_m[i]*1000:.2f}mm", fontsize=8)
     ax.axis('off')
 plt.tight_layout()
-plt.savefig('plots/diffraction_patterns.png')
+plt.savefig('plots/diffraction_patterns.png', dpi = 600)
 print("Saved diffraction patterns to plots/diffraction_patterns.png")
 plt.close(fig)
 
@@ -144,11 +145,16 @@ with torch.no_grad():
     indices = [0, len(diffraction_patterns)//2, len(diffraction_patterns)-1]
     fig, axes = plt.subplots(4, 4, figsize=(15, 15))
     
-    # Row 1: Optimized Object/Probe
-    axes[0, 0].imshow(model.object_amplitude.detach().cpu().numpy(), cmap='gray')
-    axes[0, 0].set_title('Obj Amp')
-    axes[0, 1].imshow(model.object_phase.detach().cpu().numpy(), cmap='twilight')
+# Row 1: Optimized Object/Probe
+    extent = [-object_extent/2*1000, object_extent/2*1000, -object_extent/2*1000, object_extent/2*1000]
+    axes[0, 0].imshow(model.object_amplitude.detach().cpu().numpy(), cmap='gray', extent=extent)
+    axes[0, 0].set_title('Obj Amp (mm)')
+    axes[0, 0].set_xlabel('x (mm)')
+    axes[0, 0].set_ylabel('y (mm)')
+    axes[0, 1].imshow(model.object_phase.detach().cpu().numpy(), cmap='twilight', extent=extent)
     axes[0, 1].set_title('Obj Phase')
+    axes[0, 1].set_xlabel('x (mm)')
+    axes[0, 1].set_ylabel('y (mm)')
     axes[0, 2].imshow(model.probe_amplitude.detach().cpu().numpy(), cmap='inferno')
     axes[0, 2].set_title('Probe Amp')
     axes[0, 3].imshow(model.probe_phase.detach().cpu().numpy(), cmap='twilight')
@@ -175,6 +181,8 @@ with torch.no_grad():
     plt.close(fig)
 
 plt.figure(figsize=(20, 5))
+extent = [-object_extent/2*1000, object_extent/2*1000, -object_extent/2*1000, object_extent/2*1000]
+
 plt.subplot(1, 4, 1)
 plt.plot(loss_history)
 plt.title('Optimization Loss')
@@ -183,12 +191,16 @@ plt.ylabel('MSE Loss')
 plt.yscale('log')
 
 plt.subplot(1, 4, 2)
-plt.imshow(model.object_amplitude.detach().cpu().numpy(), cmap='gray')
-plt.title('Reconstructed Amplitude')
+plt.imshow(model.object_amplitude.detach().cpu().numpy(), cmap='gray', extent=extent)
+plt.title('Reconstructed Amplitude (mm)')
+plt.xlabel('x (mm)')
+plt.ylabel('y (mm)')
 
 plt.subplot(1, 4, 3)
-plt.imshow(model.object_phase.detach().cpu().numpy(), cmap='twilight')
+plt.imshow(model.object_phase.detach().cpu().numpy(), cmap='twilight', extent=extent)
 plt.title('Reconstructed Phase')
+plt.xlabel('x (mm)')
+plt.ylabel('y (mm)')
 
 plt.subplot(1, 4, 4)
 plt.imshow(model.probe_amplitude.detach().cpu().numpy(), cmap='inferno')
